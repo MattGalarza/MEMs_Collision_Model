@@ -269,6 +269,7 @@ function animate_mems(; width = 900)
     return fig
 end
 
+
 # Run the animation
 fig = animate_mems(width=900)
 display(fig)

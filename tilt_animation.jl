@@ -92,6 +92,7 @@ function animate_mems(; width = 900)
             ]
         end
         
+        
         # Apply tilt rotation if needed
         if tilt_angle != 0
             # Determine center point for rotation (bottom center of trapezoid)

@@ -10,7 +10,7 @@ const BASE_WIDTH_RATIO = 0.03  # Narrow at base
 const MAX_TILT_ANGLE = 25  # degrees
 
 # Fixed electrode position
-const FIXED_ELECTRODE_X_RATIO = 0.48  # proportion of total width
+const FIXED_ELECTRODE_X_RATIO = 0.46  # proportion of total width
 const FIXED_ELECTRODE_Y_RATIO = 0.73  # proportion of total height
 
 # MODIFIED: Reduced displacement parameters

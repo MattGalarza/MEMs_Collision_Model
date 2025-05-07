@@ -41,6 +41,7 @@ export Params, p, electrostatic, CoupledSystem!
     e::T = 8.85e-12          # Permittivity of free space (F/m)
     ep::T = 3.2              # Permittivity of parylene
     Vbias::T = 3.0           # Bias voltage (V)
+
     
     Rload::T = 0.42e6        # Load resistance (Ω)
     N::Int = 160             # Number of electrodes

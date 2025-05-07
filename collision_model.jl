@@ -42,7 +42,6 @@ export Params, p, electrostatic, CoupledSystem!
     ep::T = 3.2              # Permittivity of parylene
     Vbias::T = 3.0           # Bias voltage (V)
 
-    
     Rload::T = 0.42e6        # Load resistance (Ω)
     N::Int = 160             # Number of electrodes
     kss::T = 6.0             # Soft-stopper spring force (N/m)

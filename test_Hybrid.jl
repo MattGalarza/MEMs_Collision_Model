@@ -102,9 +102,7 @@ g = 9.81  # Gravitational constant
 A = alpha * g  # Sinusoidal amplitude
 t_ramp = 0.2  # Ramp-up duration (s)
 noise_amplitude = 1.0 * g  # White noise amplitude 
-noise_seed = 12345         # Seed for reproducible noise
-
-
+noise_seed = 12345 # Seed for reproducible noise
 
 # Sinusoidal force function
 function sine_force(t; A, f, use_ramp, t_ramp)
@@ -117,8 +115,8 @@ function sine_force(t; A, f, use_ramp, t_ramp)
 end
 
 # White noise force function
-function white_noise_force(t; amplitude=noise_amplitude, seed=noise_seed, dt=0.001)
-    # Initialize random number generator with seed for reproducibility
+function white_noise_force(t; amplitude, seed, dt = 0.001)
+    # Initialize random number generator with seed
     rng = Random.MersenneTwister(seed)
     
     # Discretize time to generate consistent noise
@@ -134,21 +132,17 @@ function white_noise_force(t; amplitude=noise_amplitude, seed=noise_seed, dt=0.0
     return amplitude * (2*rand(rng) - 1)
 end
 
-# Zero force function
+# No force function
 zero_force(t) = 0.0
 
 # Force type selection (1: sine, 2: white noise, 3: none)
 force_type = 1
-
-# Additional parameters for sine wave
-use_ramp_for_sine = true  # Whether to use ramping for sine wave
-
-# Create the external force function based on selection
+use_ramp = true
 function create_external_force(force_type)
-    if force_type == 1  # Sine wave
-        return t -> sine_force(t, A=alpha*g, f=f, use_ramp=use_ramp_for_sine, t_ramp=t_ramp)
+    if force_type == 1  # Sinusoidal
+        return t -> sine_force(t, A = A, f = f, use_ramp = use_ramp, t_ramp = t_ramp)
     elseif force_type == 2  # White noise
-        return t -> white_noise_force(t, amplitude=noise_amplitude, seed=noise_seed)
+        return t -> white_noise_force(t, amplitude = noise_amplitude, seed = noise_seed)
     else  # No external force
         return t -> zero_force(t)
     end
@@ -156,8 +150,6 @@ end
 
 # Create the external force function
 Fext_input = create_external_force(force_type)
-
-
 
 # ------------------------- Initial Conditions -------------------------
 

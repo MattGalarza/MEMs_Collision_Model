@@ -38,6 +38,7 @@ using Parameters, ForwardDiff, SpecialFunctions, Random
     gp::T = :($(g0 - 2 * Tp))  # Initial electrode gap
     a::T = :($((wb - wt) / Leff))  # Taper ratio
     m2::T = 0.0  # Modal mass of electrode
+    I::T = 0.0  # Electrode moment of inertia
     ke::T = 0.0  # Electrode spring constant
     k1::T = 0.0  # Linear spring constant
     k3::T = 0.0  # Cubic spring constant
@@ -45,25 +46,45 @@ using Parameters, ForwardDiff, SpecialFunctions, Random
 end
 
 # Create dependent parameters for struct
-function create_mems_params(;
-    # Optional parameter overrides
-    kwargs...
-)
+function create_params(verbose = true, kwargs...)
     # Create initial params with default values and simple calculations
     params = MEMSParams(; kwargs...)
+
+    # Calculate electrode moment of inertia
+    params.I = (1/48) * params.Lff * params.Tf * (params.wb + params.wt) * (params.wb^2 + params.wt^2)
     
-    # Calculate and set modal mass (m2)
-    alpha = 0.236 + 0.045 * (1.0 - params.wt / params.wb)
+    # Calculate and set modal mass, m2
+    modalcoeff = 0.236 + 0.045 * (1.0 - params.wt / params.wb)
     m2Physical = 0.5 * params.Lff^2 * params.rho * params.Tf * (params.wb + params.wt)
-    params.m2 = alpha * m2Physical
+    params.m2 = modalcoeff * m2Physical
     
-    # Calculate electrode spring constant (ke) using FEM approximation
+    # Calculate electrode spring constant, ke
+    F = 1 # Normalized force used in ke derivation
+    num = (params.E * params.Tf * params.wt^2 * ((params.wb - params.wt)^3))
+    dem = 6 * F * params.Lff^3 * ((params.wb - 3 * params.wt) * (params.wb - params.wt) + 2 * params.wt^2 * (log(params.Lff * params.wb) - log(params.Lff * params.wt)))
+    params.ke = num / dem
     
-    
-    # Calculate spring constants
+    # Calculate spring constants, k1/k3/kss
     params.k1 = (4.0/6.0) * ((params.E * params.Tf * (params.ws^3)) / (params.Lsp^3))
     params.k3 = (18.0/25.0) * ((params.E * params.Tf * params.ws) / (params.Lsp^3))
     params.kss = (params.E * params.Tf * (params.wss^3)) / (params.Lss^3)
+
+    # Calculation checks
+    if verbose
+        println("\n--- Modal Mass Calculation ---")
+        println("Modal coefficient terms:  ", modalcoeff)
+        println("Physical mass terms:  ", m2Physical)
+        println("Modal mass, m2:  ", params.m2)
+        
+        println("\n--- Electrode Spring Constant Calculation ---")
+        println("Moment of inertia, I:  ", params.I)
+        println("Electrode spring constant, ke:  ", params.ke)
+        
+        println("\n--- Spring Constants ---")
+        println("Linear suspension spring constant, k1:  ", params.k1)
+        println("Cubic suspension spring constant, k3:  ", params.k3)
+        println("Soft-stopper spring constant, kss:  ", params.kss)
+    end
     
     return params
 end

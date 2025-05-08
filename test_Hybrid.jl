@@ -69,9 +69,7 @@ function calculate_capacitance(x2, params)
     # Should handle both pre-collision and post-collision regimes
 end
 
-
-# ===== SYSTEM DYNAMICS =====
-
+# ------------------------- Model Dynamics -------------------------
 # System dynamics with electromechanical coupling
 function mems_dynamics!(du, u, p, t)
     params, external_force_func = p

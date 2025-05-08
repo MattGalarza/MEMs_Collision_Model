@@ -44,7 +44,7 @@ using Parameters, ForwardDiff, SpecialFunctions, Random
     kss::T = 0.0  # Soft-stopper spring constant  
 end
 
-# 
+# Create dependent parameters for struct
 function create_mems_params(;
     # Optional parameter overrides
     kwargs...
@@ -58,8 +58,7 @@ function create_mems_params(;
     params.m2 = alpha * m2Physical
     
     # Calculate electrode spring constant (ke) using FEM approximation
-    # This is based on your Mathematica code for keFEMCantilever
-    params.ke = calculate_fem_ke(params)
+    
     
     # Calculate spring constants
     params.k1 = (4.0/6.0) * ((params.E * params.Tf * (params.ws^3)) / (params.Lsp^3))

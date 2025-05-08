@@ -74,32 +74,24 @@ function dynamics!(du, u, p, t)
     params, external_force = p
     
     # Unpack state variables
-    x1, x1dot, x2, x2dot, q, Vout = u
+    u1, u2, u3, u4, u5, u6 = u
     
     # Get external force
     Fext = external_force(t)
     
     # Calculate forces
-    Fs = spring(x1, params)
-    m2_effective, Fc = collision(x1, x2, params)
-    Fd = damping(x2, x2dot, params)
-    Ctotal, Fe = electrostatic(x1, x2, q, params)
-    
-    # Calculate accelerations
-    a1 = (Fs + params.N * Fc) / params.m1 - Fext
-    a2 = (Fc + Fd + Fe) / m2_effective - Fext
-    
-    # Calculate electrical dynamics
-    dQ = (params.Vbias - Q / Ctotal) / params.Rload
-    dVout = (params.Vbias - Q / Ctotal - Vout) / (params.Rload * Ctotal)
+    Fs = spring(u1, params)
+    Fc = collision(u1, u3, params)
+    Fd = damping(u3, u4, params)
+    Ctotal, Fe = electrostatic(u1, u3, u5, params)
     
     # State derivatives
-    du[1] = v1               # dx1/dt = v1
-    du[2] = a1               # dv1/dt = a1
-    du[3] = v2               # dx2/dt = v2
-    du[4] = a2               # dv2/dt = a2
-    du[5] = dQ               # dQ/dt
-    du[6] = dVout            # dVout/dt
+    du[1] = u2              
+    du[2] = (Fs + (params.N / 2) * Fc) / params.m1 - Fext               
+    du[3] = u4               
+    du[4] = (-Fc + Fd + Fe) / params.m2 - Fext               
+    du[5] = (params.Vbias - (u5 / Ctotal)) / params.Rload               
+    du[6] = (params.Vbias - u5 / Ctotal - u6) / (params.Rload * Ctotal)             
 end
 
 # ===== EXTERNAL FORCE FUNCTIONS =====

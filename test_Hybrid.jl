@@ -213,10 +213,10 @@ v1_0 = 0.0  # Initial velocity, shuttle
 x2_0 = 0.0  # Initial displacement, electrode
 v2_0 = 0.0  # Initial velocity, electrode
 
-# Compute initial electrostatic parameters
-Cinitial, _ = electrostatic(x1_0, x2_0, 0.0, params)
-q_0 = Vbias * Cinitial  # Initial charge
-V_0 = Vbias - (q_0 / Cinitial)  # Initial voltage
+# Compute initial capacitance and charge
+Cinitial = capacitance(x1_0, x2_0, 0.0, params)
+q_0 = params.Vbias * (Cinitial + params.cp)  # Initial charge
+V_0 = params.Vbias - (q_0 / (Cinitial + params.cp))  # Initial voltage
 u0 = [x1_0, v1_0, x2_0, v2_0, q_0, V_0]
 
 # ------------------------- Solve Analytical Model -------------------------
@@ -240,70 +240,3 @@ println("Type of sol.u: ", typeof(sol.u))
 println("Size of sol.u: ", size(sol.u))
 println("Solver status: ", sol.retcode)
 
-
-
-
-# Main simulation function
-function simulate_mems(params; 
-                       tspan=(0.0, 0.5), 
-                       force_func=t->0.0,
-                       x1_0=0.0, 
-                       v1_0=0.0, 
-                       x2_0=0.0, 
-                       v2_0=0.0)
-    
-    # Calculate initial capacitance and charge
-    Ctotal0 = calculate_capacitance(x2_0, params) + params.Cp
-    Q0 = params.Vbias * Ctotal0
-    Vout0 = params.Vbias - Q0 / Ctotal0
-    
-    # Initial state
-    u0 = [x1_0, v1_0, x2_0, v2_0, Q0, Vout0]
-    
-    # Create ODE problem
-    p = (params, force_func)
-    prob = ODEProblem(mems_dynamics!, u0, tspan, p)
-    
-    # Solve with appropriate solver for stiff systems
-    sol = solve(prob, Rodas5(); abstol=1e-9, reltol=1e-6, maxiters=1e7)
-    
-    return sol
-end
-
-# ===== ANALYSIS AND VISUALIZATION =====
-
-# Function to analyze forces (you can fill in the implementation)
-function analyze_forces(sol, params, force_func)
-    # YOUR CODE HERE: Extract forces at each time point
-    # Return arrays for each force component
-end
-
-# Function to create plots (you can fill in the implementation)
-function plot_results(sol, params, force_func)
-    # YOUR CODE HERE: Create comprehensive plots
-    # Return plot objects
-end
-
-# ===== EXAMPLE USAGE =====
-
-function run_simulation()
-    # Create parameter set
-    params = MEMSParams()
-    
-    # Define external force
-    external_force = t -> sine_force(t, A=3.0*9.81, f=20.0)
-    
-    # Run simulation
-    sol = simulate_mems(params, 
-                       tspan=(0.0, 0.5), 
-                       force_func=external_force,
-                       x1_0=0.0, 
-                       v1_0=0.0, 
-                       x2_0=0.3e-6, 
-                       v2_0=0.0)
-    
-    # Create plots
-    plot_results(sol, params, external_force)
-    
-    return sol, params
-end

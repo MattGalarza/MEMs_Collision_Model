@@ -70,7 +70,7 @@ function electrostatic(x2, params)
 end
 
 # ------------------------- Model Dynamics -------------------------
-function dynamics!(du, u, p, t)
+function CoupledDynamics!(du, u, p, t)
     params, external_force = p
     
     # Unpack state variables
@@ -152,6 +152,39 @@ end
 Fext_input = create_external_force(force_type)
 
 # ------------------------- Initial Conditions -------------------------
+# Initial conditions
+x1_0 = 0.0  # Initial displacement, shuttle
+v1_0 = 0.0  # Initial velocity, shuttle
+x2_0 = 0.0  # Initial displacement, electrode
+v2_0 = 0.0  # Initial velocity, electrode
+
+# Compute initial electrostatic parameters
+Cinitial, _ = electrostatic(x1_0, x2_0, 0.0, params)
+q_0 = Vbias * Cinitial  # Initial charge
+V_0 = Vbias - (q_0 / Cinitial)  # Initial voltage
+u0 = [x1_0, v1_0, x2_0, v2_0, q_0, V_0]
+
+# ------------------------- Solve Analytical Model -------------------------
+# Simulation parameters
+tspan = (0.0, 0.5) # simulation length
+# teval = () # evaluation steps
+abstol = 1e-9 # absolute solver tolerance
+reltol = 1e-6 # relative solver tolerance
+
+# Define and solve the ODE problem
+eqn = ODEProblem(CoupledDynamics!, z0, tspan, p_new)
+# eqn = ODEProblem(AnalyticalModel.CoupledSystem!, z0, tspan, p_new)
+
+# Solve the system using Rosenbrock23 solver
+sol = solve(eqn, Rosenbrock23(); abstol=abstol, reltol=reltol, maxiters=1e7)
+# If the system is too stiff, use CVODE_BDF from Sundials
+# sol = solve(eqn, CVODE_BDF(), abstol=abstol, reltol=reltol, maxiters=Int(1e9))
+
+# Verify the solution structure
+println("Type of sol.u: ", typeof(sol.u))
+println("Size of sol.u: ", size(sol.u))
+println("Solver status: ", sol.retcode)
+
 
 
 

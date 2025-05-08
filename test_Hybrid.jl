@@ -71,19 +71,19 @@ end
 
 # ------------------------- Model Dynamics -------------------------
 function dynamics!(du, u, p, t)
-    params, external_force_func = p
+    params, external_force = p
     
-    # Unpack state variables: [x1, x1dot, x2, x2dot, q, Vout]
+    # Unpack state variables
     x1, x1dot, x2, x2dot, q, Vout = u
     
     # Get external force
-    Fext = external_force_func(t)
+    Fext = external_force(t)
     
     # Calculate forces
-    Fs = calculate_spring_force(x1, params)
-    m2_effective, Fc = calculate_collision_force(x1, x2, params)
-    Fd = calculate_damping_force(x2, v2, params)
-    Ctotal, Fe = calculate_electrostatic_force(x1, x2, Q, params)
+    Fs = spring(x1, params)
+    m2_effective, Fc = collision(x1, x2, params)
+    Fd = damping(x2, x2dot, params)
+    Ctotal, Fe = electrostatic(x1, x2, q, params)
     
     # Calculate accelerations
     a1 = (Fs + params.N * Fc) / params.m1 - Fext

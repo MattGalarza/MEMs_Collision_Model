@@ -3,45 +3,70 @@ using Sundials, DifferentialEquations, Plots
 using Parameters, ForwardDiff, SpecialFunctions, Random
 
 # ------------------------- Parameter Struct -------------------------
+# Parameters struct
 @with_kw mutable struct MEMSParams{T<:Real}
     # Fundamental geometric parameters
     g0::T = 14e-6  # Initial gap
     Tp::T = 120e-9  # Parylene-C thickness
     Tf::T = 25e-6  # Electrode thickness
-    wb::T = 30e-6  # Electrode width (wide end)
-    wt::T = 9e-6  # Electrode width (narrow end)
-    ws::T = 14e-6  # Spring width
+    wt::T = 9e-6  # Electrode width, top
+    wb::T = 30e-6  # Electrode width, bottom
+    ws::T = 14.7e-6  # Suspension spring width
     wss::T = 14e-6  # Soft-stopper width
     Leff::T = 400e-6  # Effective electrode length
     Lff::T = 450e-6  # Full electrode length
-    Lsp::T = 1400e-6  # Spring length
+    Lsp::T = 1400e-6  # Suspension spring length
     Lss::T = 400e-6  # Soft-stopper length
-    gss::T = 12e-6  # Soft-stopper position
+    gss::T = 14e-6  # Soft-stopper position
     
     # Mass and material properties
-    m1::T = 1.0e-7  # Shuttle mass
+    m1::T = 2.0933e-6  # Shuttle mass
     rho::T = 2330.0  # Density of silicon
     E::T = 170e9  # Young's modulus
     eps::T = 8.85e-12  # Permittivity of free space
     eps_p::T = 3.2  # Relative permittivity of Parylene-C
-    eta::T = 1.85e-5  # Viscosity of air
-    c::T = 0.8  # Damping coefficient
+    eta::T = 1.849e-5  # Viscosity of air
+    c::T = 0.015  # Damping coefficient
     
     # Electrical parameters
     N::T = 160.0  # Number of electrodes
-    Cp::T = 5e-12  # Parasitic capacitance
-    Vbias::T = 5.0  # Bias voltage
-    Rload::T = 1.0e6  # Load resistance
+    Cp::T = 5e-12  # Capacitance of Parylene-C
+    Vbias::T = 3.0  # Bias voltage
+    Rload::T = 0.42e6  # Load resistance
     
     # Dependent parameters
     gp::T = :($(g0 - 2 * Tp))  # Initial electrode gap
     a::T = :($((wb - wt) / Leff))  # Taper ratio
-    k1::T = :($((4 / 6) * ((E * Tf * (ws^3)) / (Lsp^3))))  # Linear spring constant
-    k3::T = :($((18 / 25) * ((E * Tf * ws) / (Lsp^3))))  # Cubic spring constant
-    kss::T = :($(E * Tf * (wss^3) / (Lss^3)))  # Soft-stopper spring constant
-    I::T = :($((1 / 12) * Tf * ((wt + wb) / 2)^3))  # Moment of inertia
-    m2::T = :($((33 / 140) * rho * Tf * Lff * ((wt + wb) / 2)))  # Modal mass of electrode
-    ke::T = :($((E * Tf * (wt^3)) / (4 * Lff^3)))  # Electrode spring constant
+    m2::T = 0.0  # Modal mass of electrode
+    ke::T = 0.0  # Electrode spring constant
+    k1::T = 0.0  # Linear spring constant
+    k3::T = 0.0  # Cubic spring constant
+    kss::T = 0.0  # Soft-stopper spring constant  
+end
+
+# 
+function create_mems_params(;
+    # Optional parameter overrides
+    kwargs...
+)
+    # Create initial params with default values and simple calculations
+    params = MEMSParams(; kwargs...)
+    
+    # Calculate and set modal mass (m2)
+    alpha = 0.236 + 0.045 * (1.0 - params.wt / params.wb)
+    m2Physical = 0.5 * params.Lff^2 * params.rho * params.Tf * (params.wb + params.wt)
+    params.m2 = alpha * m2Physical
+    
+    # Calculate electrode spring constant (ke) using FEM approximation
+    # This is based on your Mathematica code for keFEMCantilever
+    params.ke = calculate_fem_ke(params)
+    
+    # Calculate spring constants
+    params.k1 = (4.0/6.0) * ((params.E * params.Tf * (params.ws^3)) / (params.Lsp^3))
+    params.k3 = (18.0/25.0) * ((params.E * params.Tf * params.ws) / (params.Lsp^3))
+    params.kss = (params.E * params.Tf * (params.wss^3)) / (params.Lss^3)
+    
+    return params
 end
 
 # ------------------------- Force Expressions -------------------------

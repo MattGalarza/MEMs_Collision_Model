@@ -45,8 +45,8 @@ using Parameters, ForwardDiff, SpecialFunctions, Random
     kss::T = 0.0  # Soft-stopper spring constant  
 end
 
-# Create dependent parameters for struct
-function create_params(verbose = true, kwargs...)
+# Function to create dependent parameters for struct
+function create_params(; verbose = true, kwargs...)
     # Create initial params with default values and simple calculations
     params = MEMSParams(; kwargs...)
 
@@ -88,6 +88,9 @@ function create_params(verbose = true, kwargs...)
     
     return params
 end
+
+# Create the full set of model parameters 
+params = create_params();
 
 # ------------------------- Force Expressions -------------------------
 # Spring force, Fs = Fsp + Fss

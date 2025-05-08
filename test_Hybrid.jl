@@ -46,32 +46,31 @@ end
 
 # ------------------------- Force Expressions -------------------------
 # Spring force, Fs = Fsp + Fss
-function calculate_spring_force(x1, params)
+function spring(x1, params)
     # YOUR CODE HERE: Implement the spring force equations
     # Should include linear, cubic nonlinear, and soft-stopper components
 end
 
 # Collision force, Fc = Fcc + Fnc
-function calculate_collision_force(x1, x2, params)
+function collision(x1, x2, params)
     # YOUR CODE HERE: Implement collision detection and forces
     # Return effective mass and force
 end
 
 # Damping force, Fd
-function calculate_damping_force(x2, x2dot, params)
+function damping(x2, x2dot, params)
     # YOUR CODE HERE: Implement damping force equations
     # Should handle both pre-collision and post-collision regimes
 end
 
 # Electrostatic force, Fe
-function calculate_capacitance(x2, params)
+function electrostatic(x2, params)
     # YOUR CODE HERE: Implement capacitance calculation
     # Should handle both pre-collision and post-collision regimes
 end
 
 # ------------------------- Model Dynamics -------------------------
-# System dynamics with electromechanical coupling
-function mems_dynamics!(du, u, p, t)
+function dynamics!(du, u, p, t)
     params, external_force_func = p
     
     # Unpack state variables: [x1, x1dot, x2, x2dot, q, Vout]

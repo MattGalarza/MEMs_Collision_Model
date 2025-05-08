@@ -112,7 +112,13 @@ function damping(x2, x2dot, params)
 end
 
 # Variable capacitance, Cvar
-function capacitance(x2, params)
+function varcapacitance(x2, params)
+    # YOUR CODE HERE: Implement capacitance calculation
+    # Should handle both pre-collision and post-collision regimes
+end
+
+# Total capacitance, Ctot
+function totcapacitance(x2, params)
     # YOUR CODE HERE: Implement capacitance calculation
     # Should handle both pre-collision and post-collision regimes
 end
@@ -137,7 +143,8 @@ function CoupledDynamics!(du, u, p, t)
     Fs = spring(u1, params)
     Fc = collision(u1, u3, params)
     Fd = damping(u3, u4, params)
-    Cvar = capacitance(u2, params)
+    Cvar = varcapacitance(u2, params)
+    Ctot = totcapacitance(u2, params)
     Fe = electrostatic(u1, u3, u5, params)
     
     # State derivatives

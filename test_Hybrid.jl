@@ -58,7 +58,7 @@ function calculate_collision_force(x1, x2, params)
 end
 
 # Damping force, Fd
-function calculate_damping_force(x2, v2, params)
+function calculate_damping_force(x2, x2dot, params)
     # YOUR CODE HERE: Implement damping force equations
     # Should handle both pre-collision and post-collision regimes
 end
@@ -76,8 +76,8 @@ end
 function mems_dynamics!(du, u, p, t)
     params, external_force_func = p
     
-    # Unpack state variables: [x1, v1, x2, v2, Q, Vout]
-    x1, v1, x2, v2, Q, Vout = u
+    # Unpack state variables: [x1, x1dot, x2, x2dot, q, Vout]
+    x1, x1dot, x2, x2dot, q, Vout = u
     
     # Get external force
     Fext = external_force_func(t)

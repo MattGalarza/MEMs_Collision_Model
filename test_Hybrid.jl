@@ -1,6 +1,6 @@
 # ------------------------- Libraries -------------------------
 using Sundials, DifferentialEquations, Plots
-using Parameters, ForwardDiff, SpecialFunctions
+using Parameters, ForwardDiff, SpecialFunctions, Random
 
 # ------------------------- Parameter Struct -------------------------
 @with_kw mutable struct MEMSParams{T<:Real}
@@ -95,26 +95,67 @@ function dynamics!(du, u, p, t)
 end
 
 # ------------------------- External Force -------------------------
-# Sine Wave External Force
-f = 20.0 # Frequency (Hz)
-alpha = 3.0 # Applied acceleration constant
-g = 9.81 # Gravitational constant 
-A = alpha * g
-t_ramp = 0.2 # Ramp-up duration (s)
-function sine_force(t; A, f, t_ramp)
-    ramp = t < t_ramp ? t / t_ramp : 1.0
-    return A * ramp * sin(2π * f * t)
+# External force parameters
+f = 20.0  # Frequency (Hz)
+alpha = 3.0  # Applied acceleration constant
+g = 9.81  # Gravitational constant 
+A = alpha * g  # Sinusoidal amplitude
+t_ramp = 0.2  # Ramp-up duration (s)
+noise_amplitude = 1.0 * g  # White noise amplitude 
+noise_seed = 12345         # Seed for reproducible noise
+
+
+
+# Sinusoidal force function
+function sine_force(t; A, f, use_ramp, t_ramp)
+    if use_ramp
+        ramp = t < t_ramp ? t / t_ramp : 1.0
+        return A * ramp * sin(2π * f * t)
+    else
+        return A * sin(2π * f * t)
+    end
 end
 
-# Set the desired external input
-use_sine = true # Set to `true` to use sine wave, `false` for displaced IC
-
-# Define Fext_input based on your choice
-if use_sine
-    Fext_input = Fext_sine
-else
-    Fext_input = t -> 0.0
+# White noise force function
+function white_noise_force(t; amplitude=noise_amplitude, seed=noise_seed, dt=0.001)
+    # Initialize random number generator with seed for reproducibility
+    rng = Random.MersenneTwister(seed)
+    
+    # Discretize time to generate consistent noise
+    discrete_t = floor(Int, t/dt)
+    
+    # Reset RNG to seed and advance to the current time point
+    Random.seed!(rng, seed)
+    for _ in 1:discrete_t
+        rand(rng)
+    end
+    
+    # Generate white noise
+    return amplitude * (2*rand(rng) - 1)
 end
+
+# Zero force function
+zero_force(t) = 0.0
+
+# Force type selection (1: sine, 2: white noise, 3: none)
+force_type = 1
+
+# Additional parameters for sine wave
+use_ramp_for_sine = true  # Whether to use ramping for sine wave
+
+# Create the external force function based on selection
+function create_external_force(force_type)
+    if force_type == 1  # Sine wave
+        return t -> sine_force(t, A=alpha*g, f=f, use_ramp=use_ramp_for_sine, t_ramp=t_ramp)
+    elseif force_type == 2  # White noise
+        return t -> white_noise_force(t, amplitude=noise_amplitude, seed=noise_seed)
+    else  # No external force
+        return t -> zero_force(t)
+    end
+end
+
+# Create the external force function
+Fext_input = create_external_force(force_type)
 
 
 

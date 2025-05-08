@@ -96,12 +96,15 @@ end
 
 # ------------------------- External Force -------------------------
 # Sine Wave External Force
+
 function sine_force(t; A=3.0*9.81, f=20.0, t_ramp=0.2)
     ramp = t < t_ramp ? t / t_ramp : 1.0
     return A * ramp * sin(2π * f * t)
 end
 
-# ===== SIMULATION SETUP AND EXECUTION =====
+# ------------------------- Initial Conditions -------------------------
+
+
 
 # Main simulation function
 function simulate_mems(params; 

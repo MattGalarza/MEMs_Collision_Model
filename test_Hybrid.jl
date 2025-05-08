@@ -1,8 +1,8 @@
-# Libraries 
+# ------------------------- Libraries -------------------------
 using Sundials, DifferentialEquations, Plots
 using Parameters, ForwardDiff, SpecialFunctions
 
-# Parameter Struct
+# ------------------------- Parameter Struct -------------------------
 @with_kw mutable struct MEMSParams{T<:Real}
     # Fundamental geometric parameters
     g0::T = 14e-6  # Initial gap
@@ -44,45 +44,31 @@ using Parameters, ForwardDiff, SpecialFunctions
     ke::T = :($((E * Tf * (wt^3)) / (4 * Lff^3)))  # Electrode spring constant
 end
 
-# --------------------------------------- Analytical Model ----------------------------------
-
-# Spring force (implement your specific equations)
+# ------------------------- Force Expressions -------------------------
+# Spring force, Fs = Fsp + Fss
 function calculate_spring_force(x1, params)
     # YOUR CODE HERE: Implement the spring force equations
     # Should include linear, cubic nonlinear, and soft-stopper components
 end
 
-# Collision force (implement your specific equations)
+# Collision force, Fc = Fcc + Fnc
 function calculate_collision_force(x1, x2, params)
     # YOUR CODE HERE: Implement collision detection and forces
     # Return effective mass and force
 end
 
-# Damping force (implement your specific equations)
+# Damping force, Fd
 function calculate_damping_force(x2, v2, params)
     # YOUR CODE HERE: Implement damping force equations
     # Should handle both pre-collision and post-collision regimes
 end
 
-# Capacitance and electrostatic force
+# Electrostatic force, Fe
 function calculate_capacitance(x2, params)
     # YOUR CODE HERE: Implement capacitance calculation
     # Should handle both pre-collision and post-collision regimes
 end
 
-function calculate_electrostatic_force(x1, x2, Q, params)
-    # Calculate capacitance
-    Cvar = calculate_capacitance(x2, params)
-    Ctotal = Cvar + params.Cp
-    
-    # Calculate capacitance derivative using ForwardDiff
-    dCdx = ForwardDiff.derivative(x -> calculate_capacitance(x, params), x2)
-    
-    # Calculate electrostatic force
-    Fe = -(Q^2 / (2 * Ctotal^2)) * dCdx
-    
-    return Ctotal, Fe
-end
 
 # ===== SYSTEM DYNAMICS =====
 

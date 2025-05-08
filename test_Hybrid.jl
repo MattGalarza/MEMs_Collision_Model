@@ -96,11 +96,27 @@ end
 
 # ------------------------- External Force -------------------------
 # Sine Wave External Force
-
-function sine_force(t; A=3.0*9.81, f=20.0, t_ramp=0.2)
+f = 20.0 # Frequency (Hz)
+alpha = 3.0 # Applied acceleration constant
+g = 9.81 # Gravitational constant 
+A = alpha * g
+t_ramp = 0.2 # Ramp-up duration (s)
+function sine_force(t; A, f, t_ramp)
     ramp = t < t_ramp ? t / t_ramp : 1.0
     return A * ramp * sin(2π * f * t)
 end
+
+# Set the desired external input
+use_sine = true # Set to `true` to use sine wave, `false` for displaced IC
+
+# Define Fext_input based on your choice
+if use_sine
+    Fext_input = Fext_sine
+else
+    Fext_input = t -> 0.0
+end
+
+
 
 # ------------------------- Initial Conditions -------------------------
 

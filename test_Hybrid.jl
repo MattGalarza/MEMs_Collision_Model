@@ -94,7 +94,7 @@ params = create_params();
 
 # ------------------------- Force Expressions -------------------------
 # Spring force, Fs = Fsp + Fss
-function spring(x1, collision_mode, params)
+function spring(x1, params)
     # Suspension spring component
     Fsp = params.k1 * x1  # Linear
     # Fsp = params.k1 * x1 + params.k3 * x1^3  # Nonlinear
@@ -113,17 +113,17 @@ function spring(x1, collision_mode, params)
 end
 
 # Collision force, Fc = Fcc + Fnc
-function collision(x1, x2, collision_mode, params)
+function collision(x1, x2, params)
     # Independent electrode restoring force
     Fnc = -params.ke * (x2 - x1)
     
-    if collision_mode
-        # Electrode restoring force during contact
+    # Electrode restoring force during contact
+    if abs(x1) >= params.gp
         Fcontact = params.ke * (abs(x2) - params.gp) * sign(x2)
         Fc = Fnc + Fcontact
-        return Fc
+        return Fc 
     else
-        return Fnc
+        return Fnc 
     end
 end
 
@@ -135,8 +135,7 @@ end
 
 # Variable capacitance, Cvar
 function capacitance(x2, params)
-    # YOUR CODE HERE: Implement capacitance calculation
-    # Should handle both pre-collision and post-collision regimes
+    if
 end
 
 # Electrostatic force, Fe

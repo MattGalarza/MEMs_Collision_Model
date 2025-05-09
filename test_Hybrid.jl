@@ -16,7 +16,7 @@ using Parameters, ForwardDiff, SpecialFunctions, Random
     Leff::T = 400e-6  # Effective electrode length
     Lff::T = 450e-6  # Full electrode length
     Lsp::T = 1400e-6  # Suspension spring length
-    Lss::T = 400e-6  # Soft-stopper length
+    Lss::T = 1000e-6  # Soft-stopper length
     gss::T = 14e-6  # Soft-stopper position
     
     # Mass and material properties
@@ -46,7 +46,7 @@ using Parameters, ForwardDiff, SpecialFunctions, Random
 end
 
 # Function to create dependent parameters for struct
-function create_params(; verbose = false, kwargs...)
+function create_params(; verbose = true, kwargs...)
     # Create initial params with default values and simple calculations
     params = MEMSParams(; kwargs...)
 

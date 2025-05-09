@@ -46,7 +46,7 @@ using Parameters, ForwardDiff, SpecialFunctions, Random
 end
 
 # Function to create dependent parameters for struct
-function create_params(; verbose = true, kwargs...)
+function create_params(; verbose = false, kwargs...)
     # Create initial params with default values and simple calculations
     params = MEMSParams(; kwargs...)
 

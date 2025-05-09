@@ -376,4 +376,19 @@ if !isempty(ss_events)
 end
 
 # ------------------------- Model Results and Plotting -------------------------
+# Extract solution components
+times = sol.t
+x1 = [u[1] for u in sol.u]
+x1dot = [u[2] for u in sol.u]
+x2 = [u[3] for u in sol.u]
+x2dot = [u[4] for u in sol.u]
+q = [u[5] for u in sol.u]
+Vout = [u[6] for u in sol.u]
+
+# Flag points where collision events occurred
+ss_flags = [abs(x1_val) >= params.gss for x1_val in x1]
+collision_flags = [abs(x2_val) >= params.gp for x2_val in x2]
+
+
+
 

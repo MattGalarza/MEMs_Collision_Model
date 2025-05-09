@@ -319,7 +319,7 @@ x2_0 = 0.0  # Initial displacement, electrode
 v2_0 = 0.0  # Initial velocity, electrode
 
 # Compute initial capacitance and charge
-Cinitial = capacitance(x1_0, x2_0, 0.0, params)
+Cinitial = capacitance(x2_0, params)
 q_0 = params.Vbias * (Cinitial + params.cp)  # Initial charge
 V_0 = params.Vbias - (q_0 / (Cinitial + params.cp))  # Initial voltage
 u0 = [x1_0, v1_0, x2_0, v2_0, q_0, V_0]

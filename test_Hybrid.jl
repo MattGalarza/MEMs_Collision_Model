@@ -137,7 +137,7 @@ end
 function capacitance(x2, params)
     # Parylene Layer Capacitance
     Crl = (params.e * params.ep * params.Leff * params.Tf) / params.Tp
-    if abs(x2) < params.gp
+    if abs(x2) < params.gp  # translation (non-collision)
         # RHS capacitance
         Cairr = ((params.e * params.Tf) / params.a) * log((params.gp - x2 + params.a * params.Leff) / (params.gp - x2))
         Cvarr = 1 / ((2 / Crl) + (1 / Cairr))
@@ -146,7 +146,7 @@ function capacitance(x2, params)
         Cvarl = 1 / ((2 / Crl) + (1 / Cairl))
         # Total variable capacitance
         Cvar = (N / 2) * (Cvarr + Cvarl)
-    else
+    else  # rotation (collision)
         # RHS capacitance (collision)
         k = (2 * params.Tp) / (params.a * params.Leff)
         C0 = 7.105299639935359*10^-14

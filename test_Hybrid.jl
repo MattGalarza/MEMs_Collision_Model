@@ -97,14 +97,14 @@ params = create_params();
 # Spring force, Fs = Fsp + Fss
 function spring(x1, params)
     # Suspension spring component
-    Fsp = params.k1 * x1  # Linear
-    # Fsp = params.k1 * x1 + params.k3 * x1^3  # Nonlinear
+    Fsp = -params.k1 * x1  # Linear
+    # Fsp = -params.k1 * x1 - params.k3 * x1^3  # Nonlinear
 
     # Soft-stopper spring component
     if abs(x1) < params.gp
         Fss = 0  # No soft-stopper force
     else
-        Fss = params.kss * (abs(x1) - params.gss) * sign(x1)  # soft-stopper engaged
+        Fss = -params.kss * (abs(x1) - params.gss) * sign(x1)  # soft-stopper engaged
     end
 
     # Total spring force
@@ -115,16 +115,12 @@ end
 
 # Collision force, Fc = Fcc + Fnc
 function collision(x1, x2, params)
-    # Independent electrode restoring force
-    Fnc = -params.ke * (x2 - x1)
-    
-    # Electrode restoring force during contact
-    if abs(x2) >= params.gp
-        Fcontact = params.ke * (abs(x1) - params.gp) * sign(x2)
-        return Fcontact 
-    else
-        return Fnc 
+    if abs(x2) < params.gp # Independent electrode restoring force
+        Fc = -params.ke * (x2 - x1)
+    else # Electrode restoring force during contact
+        Fc = params.ke * (abs(x1) - params.gp) * sign(x2)
     end
+    return Fc
 end
 
 # Damping force, Fd
@@ -145,7 +141,7 @@ function capacitance(x2, params)
         Cairl = ((params.e * params.Tf) / params.a) * log((params.gp + x2 + params.a * params.Leff) / (params.gp + x2))
         Cvarl = 1 / ((2 / Crl) + (1 / Cairl))
         # Total variable capacitance
-        Cvar = (N / 2) * (Cvarr + Cvarl)
+        Cvar = (params.N / 2) * (Cvarr + Cvarl)
     else  # rotation (collision)
         # RHS capacitance (collision)
         k = (2 * params.Tp) / (params.a * params.Leff)
@@ -157,7 +153,7 @@ function capacitance(x2, params)
         Cairnc = ((params.e * params.Tf) / params.a) * log((params.gp + x2 + params.a * params.Leff) / (params.gp + x2))
         Cvarnc = 1 / ((2 / Crl) + (1 / Cairnc))
         # Total variable capacitance
-        Cvar = (N / 2) * (Cvarc + Cvarnc)
+        Cvar = (params.N / 2) * (Cvarc + Cvarnc)
     end
     return Cvar        
 end
@@ -165,17 +161,18 @@ end
 # Electrostatic force, Fe
 function electrostatic(x1, x2, q, Cvar, params)
     # Calculate total capacitance
-    Ctotal = Cvar + params.Cp
+    Ctot = Cvar + params.Cp
     
     # Calculate capacitance derivative
     h = 1e-10  # Small step for numerical differentiation
-    C1 = calculate_capacitance(x2 - h, params)
-    C2 = calculate_capacitance(x2 + h, params)
+    C1 = capacitance(x2 - h, params)
+    C2 = capacitance(x2 + h, params)
     dCdx = (C2 - C1) / (2 * h)
+    dC = ForwardDiff.derivative(capacitance, x2)
     
     # Calculate electrostatic force
-    Fe = -0.5 * (q^2 / Ctotal^2) * dCdx
-    return Ctotal, Fe
+    Fe = (-0.5 * (q^2 / Ctot^2) * dC) / (params.N / 2)
+    return Ctot, Fe
 end
 
 # ------------------------- Model Dynamics -------------------------

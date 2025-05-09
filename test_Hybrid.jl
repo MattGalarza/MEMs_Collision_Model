@@ -77,6 +77,7 @@ function create_params(; verbose = false, kwargs...)
         println("Modal mass, m2:  ", params.m2)
         
         println("\n--- Electrode Spring Constant Calculation ---")
+        println("Tilt angle, a:  ", params.a)
         println("Moment of inertia, I:  ", params.I)
         println("Electrode spring constant, ke:  ", params.ke)
         
@@ -134,7 +135,31 @@ end
 
 # Variable capacitance, Cvar
 function capacitance(x2, params)
-    if abs(x2)
+    # Parylene Layer Capacitance
+    Crl = (params.e * params.ep * params.Leff * params.Tf) / params.Tp
+    if abs(x2) < params.gp
+        # RHS capacitance
+        Cairr = ((params.e * params.Tf) / params.a) * log((params.gp - x2 + params.a * params.Leff) / (params.gp - x2))
+        Cvarr = 1 / ((2 / Crl) + (1 / Cairr))
+        # LHS capacitance
+        Cairl = ((params.e * params.Tf) / params.a) * log((params.gp + x2 + params.a * params.Leff) / (params.gp + x2))
+        Cvarl = 1 / ((2 / Crl) + (1 / Cairl))
+        # Total variable capacitance
+        Cvar = (N / 2) * (Cvarr + Cvarl)
+    else
+        # RHS capacitance (collision)
+        k = (2 * params.Tp) / (params.a * params.Leff)
+        C0 = 7.105299639935359*10^-14
+        Cinf =  9.95200974248769*10^-11
+        Cairc = C0 + (Cinf - C0) * (log(1 + k * (x2 - params.gp)) / log(1 + k * (params.a * params.Leff)))
+        Cvarc = 1 / ((2 / Crl) + (1 / Cairc))
+        # LHS capacitance (non-collision)
+        Cairnc = ((params.e * params.Tf) / params.a) * log((params.gp + x2 + params.a * params.Leff) / (params.gp + x2))
+        Cvarnc = 1 / ((2 / Crl) + (1 / Cairnc))
+        # Total variable capacitance
+        Cvar = (N / 2) * (Cvarc + Cvarnc)
+    end
+    return Cvar        
 end
 
 # Electrostatic force, Fe

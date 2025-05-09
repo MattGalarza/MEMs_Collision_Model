@@ -163,9 +163,19 @@ function capacitance(x2, params)
 end
 
 # Electrostatic force, Fe
-function electrostatic(x2, params)
-    # YOUR CODE HERE: Implement capacitance calculation
-    # Should handle both pre-collision and post-collision regimes
+function electrostatic(x1, x2, q, Cvar, params)
+    # Calculate total capacitance
+    Ctotal = Cvar + params.Cp
+    
+    # Calculate capacitance derivative
+    h = 1e-10  # Small step for numerical differentiation
+    C1 = calculate_capacitance(x2 - h, params)
+    C2 = calculate_capacitance(x2 + h, params)
+    dCdx = (C2 - C1) / (2 * h)
+    
+    # Calculate electrostatic force
+    Fe = -0.5 * (q^2 / Ctotal^2) * dCdx
+    return Ctotal, Fe
 end
 
 # ------------------------- Model Dynamics -------------------------
@@ -182,8 +192,8 @@ function CoupledDynamics!(du, u, p, t)
     Fs = spring(u1, params)
     Fc = collision(u1, u3, params)
     Fd = damping(u3, u4, params)
-    Cvar = varcapacitance(u2, params)
-    Ctot, Fe = electrostatic(u1, u3, u5, params)
+    Cvar = capacitance(u2, params)
+    Ctot, Fe = electrostatic(u1, u3, u5, Cvar, params)
     
     # State derivatives
     du[1] = u2              

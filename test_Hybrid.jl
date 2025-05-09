@@ -125,8 +125,8 @@ end
 
 # Damping force, Fd
 function damping(x2, x2dot, params)
-    # YOUR CODE HERE: Implement damping force equations
-    # Should handle both pre-collision and post-collision regimes
+    Fd = 0
+    return Fd
 end
 
 # Variable capacitance, Cvar

@@ -258,6 +258,59 @@ end
 # Create the external force function
 Fext_input = create_external_force(force_type)
 
+# ------------------------- Event Handling for System -------------------------
+# Condition function to detect soft-stopper engagement, abs(x1) = gss
+function stopper_condition(u, t, integrator)
+    # Extract shuttle position
+    x1 = u[1]
+    params = integrator.p[1]
+    # Root finding
+    return abs(x1) - params.gss
+end
+
+# Condition function to detect electrode collision, abs(x2) = gp 
+function collision_condition(u, t, integrator)
+    # Extract electrode position
+    x2 = u[3]
+    params = integrator.p[1]
+    # Root finding
+    return abs(x2) - params.gp
+end
+
+# Affect function for soft-stopper engagement
+function soft_stopper_affect!(integrator)
+    ss_time = integrator.t
+    ss_state = copy(integrator.u)
+    
+    # Store event information
+    if !haskey(integrator.opts.callback.continuous_callbacks[2].affect!.kwargs, :ss_events)
+        integrator.opts.callback.continuous_callbacks[2].affect!.kwargs[:ss_events] = [(ss_time, ss_state)]
+    else
+        push!(integrator.opts.callback.continuous_callbacks[2].affect!.kwargs[:ss_events], 
+              (ss_time, ss_state))
+    end
+    
+    # Tighten tolerances near discontinuity
+    set_proposed_dt!(integrator, integrator.dt/2)
+end
+
+# Affect function for electrode collision
+function collision_affect!(integrator)
+    collision_time = integrator.t
+    collision_state = copy(integrator.u)
+    
+    # Store event information
+    if !haskey(integrator.opts.callback.continuous_callbacks[1].affect!.kwargs, :collision_events)
+        integrator.opts.callback.continuous_callbacks[1].affect!.kwargs[:collision_events] = [(collision_time, collision_state)]
+    else
+        push!(integrator.opts.callback.continuous_callbacks[1].affect!.kwargs[:collision_events], 
+              (collision_time, collision_state))
+    end
+    
+    # Tighten tolerances near discontinuity
+    set_proposed_dt!(integrator, integrator.dt/2)
+end
+
 # ------------------------- Initial Conditions -------------------------
 # Initial conditions
 x1_0 = 0.0  # Initial displacement, shuttle

@@ -95,10 +95,20 @@ params = create_params();
 # ------------------------- Force Expressions -------------------------
 # Spring force, Fs = Fsp + Fss
 function spring(x1, params)
+    # Suspension spring component
     Fsp = params.k1 * x1  # Linear
     # Fsp = params.k1 * x1 + params.k3 * x1^3  # Nonlinear
 
+    if abs(x1) < params.gp
+        Fss = 0  # No soft-stopper force
+    else
+        Fss = params.kss * (abs(x1) - params.gss) * sign(x1)  # soft-stopper engaged
+    end
 
+    # Total spring force
+    Fs = Fsp + Fss
+
+    return Fs
 end
 
 # Collision force, Fc = Fcc + Fnc

@@ -99,6 +99,7 @@ function spring(x1, params)
     Fsp = params.k1 * x1  # Linear
     # Fsp = params.k1 * x1 + params.k3 * x1^3  # Nonlinear
 
+    # Soft-stopper spring component
     if abs(x1) < params.gp
         Fss = 0  # No soft-stopper force
     else

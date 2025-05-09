@@ -95,8 +95,10 @@ params = create_params();
 # ------------------------- Force Expressions -------------------------
 # Spring force, Fs = Fsp + Fss
 function spring(x1, params)
-    # YOUR CODE HERE: Implement the spring force equations
-    # Should include linear, cubic nonlinear, and soft-stopper components
+    Fsp = params.k1 * x1  # Linear
+    # Fsp = params.k1 * x1 + params.k3 * x1^3  # Nonlinear
+
+
 end
 
 # Collision force, Fc = Fcc + Fnc

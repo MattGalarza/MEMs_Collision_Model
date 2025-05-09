@@ -134,13 +134,7 @@ function damping(x2, x2dot, params)
 end
 
 # Variable capacitance, Cvar
-function varcapacitance(x2, params)
-    # YOUR CODE HERE: Implement capacitance calculation
-    # Should handle both pre-collision and post-collision regimes
-end
-
-# Total capacitance, Ctot
-function totcapacitance(x2, params)
+function capacitance(x2, params)
     # YOUR CODE HERE: Implement capacitance calculation
     # Should handle both pre-collision and post-collision regimes
 end
@@ -166,70 +160,16 @@ function CoupledDynamics!(du, u, p, t)
     Fc = collision(u1, u3, params)
     Fd = damping(u3, u4, params)
     Cvar = varcapacitance(u2, params)
-    Ctot = totcapacitance(u2, params)
-    Fe = electrostatic(u1, u3, u5, params)
+    Ctot, Fe = electrostatic(u1, u3, u5, params)
     
     # State derivatives
     du[1] = u2              
     du[2] = (Fs + (params.N / 2) * Fc) / params.m1 - Fext               
     du[3] = u4               
     du[4] = (-Fc + Fd + Fe) / params.m2 - Fext               
-    du[5] = (params.Vbias - (u5 / Ctotal)) / params.Rload               
-    du[6] = (params.Vbias - u5 / Ctotal - u6) / (params.Rload * Ctotal)             
+    du[5] = (params.Vbias - (u5 / Ctot)) / params.Rload               
+    du[6] = (params.Vbias - u5 / Ctot - u6) / (params.Rload * Ctot)             
 end
-
-function PreCollisionDynamics!(du, u, p, t)
-    params, external_force = p
-    
-    # Unpack state variables
-    u1, u2, u3, u4, u5, u6 = u
-    
-    # Get external force
-    Fext = external_force(t)
-    
-    # Calculate forces
-    Fs = spring(u1, params)
-    Fc = collision(u1, u3, params)
-    Fd = damping(u3, u4, params)
-    Cvar = varcapacitance(u2, params)
-    Ctot = totcapacitance(u2, params)
-    Fe = electrostatic(u1, u3, u5, params)
-    
-    # State derivatives
-    du[1] = u2              
-    du[2] = (Fs + (params.N / 2) * Fc) / params.m1 - Fext               
-    du[3] = u4               
-    du[4] = (-Fc + Fd + Fe) / params.m2 - Fext               
-    du[5] = (params.Vbias - (u5 / Ctotal)) / params.Rload               
-    du[6] = (params.Vbias - u5 / Ctotal - u6) / (params.Rload * Ctotal)             
-end
-
-function CollisionDynamics!(du, u, p, t)
-    params, external_force = p
-    
-    # Unpack state variables
-    u1, u2, u3, u4, u5, u6 = u
-    
-    # Get external force
-    Fext = external_force(t)
-    
-    # Calculate forces
-    Fs = spring(u1, params)
-    Fc = collision(u1, u3, params)
-    Fd = damping(u3, u4, params)
-    Cvar = varcapacitance(u2, params)
-    Ctot = totcapacitance(u2, params)
-    Fe = electrostatic(u1, u3, u5, params)
-    
-    # State derivatives
-    du[1] = u2              
-    du[2] = (Fs + (params.N / 2) * Fc) / params.m1 - Fext               
-    du[3] = u4               
-    du[4] = (-Fc + Fd + Fe) / params.m2 - Fext               
-    du[5] = (params.Vbias - (u5 / Ctotal)) / params.Rload               
-    du[6] = (params.Vbias - u5 / Ctotal - u6) / (params.Rload * Ctotal)             
-end
-
 
 # ------------------------- External Force -------------------------
 # External force parameters

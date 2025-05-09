@@ -118,10 +118,9 @@ function collision(x1, x2, params)
     Fnc = -params.ke * (x2 - x1)
     
     # Electrode restoring force during contact
-    if abs(x1) >= params.gp
-        Fcontact = params.ke * (abs(x2) - params.gp) * sign(x2)
-        Fc = Fnc + Fcontact
-        return Fc 
+    if abs(x2) >= params.gp
+        Fcontact = params.ke * (abs(x1) - params.gp) * sign(x2)
+        return Fcontact 
     else
         return Fnc 
     end
@@ -135,7 +134,7 @@ end
 
 # Variable capacitance, Cvar
 function capacitance(x2, params)
-    if
+    if abs(x2)
 end
 
 # Electrostatic force, Fe

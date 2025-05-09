@@ -331,17 +331,49 @@ tspan = (0.0, 0.5) # simulation length
 abstol = 1e-9 # absolute solver tolerance
 reltol = 1e-6 # relative solver tolerance
 
-# Define and solve the ODE problem
-eqn = ODEProblem(CoupledDynamics!, z0, tspan, p_new)
-# eqn = ODEProblem(AnalyticalModel.CoupledSystem!, z0, tspan, p_new)
+# Create callbacks for event detection
+cb_collision = ContinuousCallback(collision_condition, collision_affect!, nothing; 
+                                 rootfind=true, save_positions=(true,false))
+cb_soft_stopper = ContinuousCallback(soft_stopper_condition, soft_stopper_affect!, nothing; 
+                                    rootfind=true, save_positions=(true,false))
+cb_set = CallbackSet(cb_collision, cb_soft_stopper)
 
-# Solve the system using Rosenbrock23 solver
-sol = solve(eqn, Rosenbrock23(); abstol=abstol, reltol=reltol, maxiters=1e7)
+# Problem parameters
+problem_params = (params, Fext_input)
+
+# Define the ODE problem with callbacks
+prob = ODEProblem(CoupledDynamics!, u0, tspan, problem_params)
+
+# Solve the system using an appropriate solver for stiff systems with discontinuities
+sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e7, dtmin=1e-15, force_dtmin=true, save_everystep=true, saveat=0.0:0.0001:0.5)
+
 # If the system is too stiff, use CVODE_BDF from Sundials
-# sol = solve(eqn, CVODE_BDF(), abstol=abstol, reltol=reltol, maxiters=Int(1e9))
+# sol = solve(prob, CVODE_BDF(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=Int(1e9))
 
 # Verify the solution structure
 println("Type of sol.u: ", typeof(sol.u))
 println("Size of sol.u: ", size(sol.u))
 println("Solver status: ", sol.retcode)
+println("Solution time span: ", sol.t[1], " to ", sol.t[end])
+println("Number of timesteps: ", length(sol.t))
+
+# Retrieve event information
+collision_events = get(sol.prob.f.f.callbacks.continuous_callbacks[1].affect!.kwargs, :collision_events, [])
+ss_events = get(sol.prob.f.f.callbacks.continuous_callbacks[2].affect!.kwargs, :ss_events, [])
+
+println("\nCollision events: ", length(collision_events))
+if !isempty(collision_events)
+    for (i, (t, _)) in enumerate(collision_events)
+        println("  Event $i at t = $t")
+    end
+end
+
+println("\nSoft-stopper events: ", length(ss_events))
+if !isempty(ss_events)
+    for (i, (t, _)) in enumerate(ss_events)
+        println("  Event $i at t = $t")
+    end
+end
+
+# ------------------------- Model Results and Plotting -------------------------
 

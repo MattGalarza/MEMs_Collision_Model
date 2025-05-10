@@ -171,10 +171,10 @@ function capacitance(x2, params)
         k = (2 * params.Tp) / (params.a * params.Leff)
         C0 = 7.105299639935359*10^-14
         Cinf =  9.95200974248769*10^-11
-        Cairc = C0 + (Cinf - C0) * (log(1 + k * (x2 - params.gp)) / log(1 + k * (params.a * params.Leff)))
+        Cairc = C0 + (Cinf - C0) * (log(1 + k * (abs(x2) - params.gp)) / log(1 + k * (params.a * params.Leff)))
         Cvarc = 1 / ((2 / Crl) + (1 / Cairc))
         # LHS capacitance (non-collision)
-        Cairnc = ((params.e * params.Tf) / params.a) * log((params.gp + x2 + params.a * params.Leff) / (params.gp + x2))
+        Cairnc = ((params.e * params.Tf) / params.a) * log((params.gp + abs(x2) + params.a * params.Leff) / (params.gp + abs(x2)))
         Cvarnc = 1 / ((2 / Crl) + (1 / Cairnc))
         # Total variable capacitance
         Cvar = (params.N / 2) * (Cvarc + Cvarnc)
@@ -228,7 +228,7 @@ end
 # ------------------------- External Force -------------------------
 # External force parameters
 f = 20.0  # Frequency (Hz)
-alpha = 1.0  # Applied acceleration constant
+alpha = 2.0  # Applied acceleration constant
 g = 9.81  # Gravitational constant 
 A = alpha * g  # Sinusoidal amplitude
 t_ramp = 0.2  # Ramp-up duration (s)
@@ -283,6 +283,15 @@ end
 Fext_input = create_external_force(force_type)
 
 # ------------------------- Event Handling for System -------------------------
+# Event storage structure to reliably capture events
+mutable struct EventStorage
+    collision_events::Vector{Tuple{Float64, Vector{Float64}}}
+    ss_events::Vector{Tuple{Float64, Vector{Float64}}}
+end
+
+# Initialize event storage
+event_storage = EventStorage([], [])
+
 # Condition function to detect soft-stopper engagement, abs(x1) = gss
 function stopper_condition(u, t, integrator)
     # Extract shuttle position
@@ -306,13 +315,8 @@ function stopper_affect!(integrator)
     ss_time = integrator.t
     ss_state = copy(integrator.u)
     
-    # Store event information
-    if !haskey(integrator.opts.callback.continuous_callbacks[2].affect!.kwargs, :ss_events)
-        integrator.opts.callback.continuous_callbacks[2].affect!.kwargs[:ss_events] = [(ss_time, ss_state)]
-    else
-        push!(integrator.opts.callback.continuous_callbacks[2].affect!.kwargs[:ss_events], 
-              (ss_time, ss_state))
-    end
+    # Store event in global storage
+    push!(event_storage.ss_events, (ss_time, ss_state))
     
     # Tighten tolerances near discontinuity
     set_proposed_dt!(integrator, integrator.dt/2)
@@ -323,13 +327,8 @@ function collision_affect!(integrator)
     collision_time = integrator.t
     collision_state = copy(integrator.u)
     
-    # Store event information
-    if !haskey(integrator.opts.callback.continuous_callbacks[1].affect!.kwargs, :collision_events)
-        integrator.opts.callback.continuous_callbacks[1].affect!.kwargs[:collision_events] = [(collision_time, collision_state)]
-    else
-        push!(integrator.opts.callback.continuous_callbacks[1].affect!.kwargs[:collision_events], 
-              (collision_time, collision_state))
-    end
+    # Store event in global storage
+    push!(event_storage.collision_events, (collision_time, collision_state))
     
     # Tighten tolerances near discontinuity
     set_proposed_dt!(integrator, integrator.dt/2)
@@ -369,8 +368,8 @@ problem_params = (params, Fext_input)
 prob = ODEProblem(CoupledDynamics!, u0, tspan, problem_params)
 
 # Solve the system using an appropriate solver for stiff systems with discontinuities
-# sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e7, dtmin=1e-15, force_dtmin=true, save_everystep=true, saveat=0.0:0.0001:0.5)
-sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e8, dtmin=1e-16, force_dtmin=true, save_everystep=true, saveat=0.0:0.0001:0.5, isoutofdomain=(u,p,t) -> false)
+sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e7, dtmin=1e-15, force_dtmin=true, save_everystep=true, saveat=0.0:0.0001:0.5)
+# sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e8, dtmin=1e-16, force_dtmin=true, save_everystep=false, saveat=0.0:0.0001:0.5, isoutofdomain=(u,p,t) -> false)
 
 # If the system is too stiff, use CVODE_BDF from Sundials
 # sol = solve(prob, CVODE_BDF(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=Int(1e9))
@@ -382,20 +381,17 @@ println("Solver status: ", sol.retcode)
 println("Solution time span: ", sol.t[1], " to ", sol.t[end])
 println("Number of timesteps: ", length(sol.t))
 
-# Retrieve event information
-collision_events = get(sol.prob.f.f.callbacks.continuous_callbacks[1].affect!.kwargs, :collision_events, [])
-ss_events = get(sol.prob.f.f.callbacks.continuous_callbacks[2].affect!.kwargs, :ss_events, [])
-
-println("\nCollision events: ", length(collision_events))
-if !isempty(collision_events)
-    for (i, (t, _)) in enumerate(collision_events)
+# Access event information from our custom storage
+println("\nCollision events: ", length(event_storage.collision_events))
+if !isempty(event_storage.collision_events)
+    for (i, (t, _)) in enumerate(event_storage.collision_events)
         println("  Event $i at t = $t")
     end
 end
 
-println("\nSoft-stopper events: ", length(ss_events))
-if !isempty(ss_events)
-    for (i, (t, _)) in enumerate(ss_events)
+println("\nSoft-stopper events: ", length(event_storage.ss_events))
+if !isempty(event_storage.ss_events)
+    for (i, (t, _)) in enumerate(event_storage.ss_events)
         println("  Event $i at t = $t")
     end
 end

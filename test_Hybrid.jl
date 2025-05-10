@@ -23,8 +23,8 @@ using Parameters, ForwardDiff, SpecialFunctions, Random
     m1::T = 2.0933e-6  # Shuttle mass
     rho::T = 2330.0  # Density of silicon
     E::T = 170e9  # Young's modulus
-    eps::T = 8.85e-12  # Permittivity of free space
-    eps_p::T = 3.2  # Relative permittivity of Parylene-C
+    e::T = 8.85e-12  # Permittivity of free space
+    ep::T = 3.2  # Relative permittivity of Parylene-C
     eta::T = 1.849e-5  # Viscosity of air
     c::T = 0.015  # Damping coefficient
     
@@ -101,7 +101,7 @@ function spring(x1, params)
     # Fsp = -params.k1 * x1 - params.k3 * x1^3  # Nonlinear
 
     # Soft-stopper spring component
-    if abs(x1) < params.gp
+    if abs(x1) < params.gss
         Fss = 0  # No soft-stopper force
     else
         Fss = -params.kss * (abs(x1) - params.gss) * sign(x1)  # soft-stopper engaged
@@ -147,7 +147,8 @@ function damping(x2, x2dot, params)
         # Total force
         Fd = params.c * (Fr + Fl)
     else # rotation (collision)
-
+        # Total force
+        Fd = 0.0
     end
     return Fd
 end
@@ -191,7 +192,7 @@ function electrostatic(x2, q, Cvar, params)
     C1 = capacitance(x2 - h, params)
     C2 = capacitance(x2 + h, params)
     dCdx = (C2 - C1) / (2 * h)
-    dC = ForwardDiff.derivative(capacitance, x2)
+    dC = ForwardDiff.derivative(x -> capacitance(x, params), x2)
     
     # Calculate electrostatic force
     Fe = (-0.5 * (q^2 / Ctot^2) * dC) / (params.N / 2)
@@ -212,7 +213,7 @@ function CoupledDynamics!(du, u, p, t)
     Fs = spring(u1, params)
     Fc = collision(u1, u3, params)
     Fd = damping(u3, u4, params)
-    Cvar = capacitance(u2, params)
+    Cvar = capacitance(u3, params)
     Ctot, Fe = electrostatic(u3, u5, Cvar, params)
     
     # State derivatives
@@ -343,8 +344,8 @@ v2_0 = 0.0  # Initial velocity, electrode
 
 # Compute initial capacitance and charge
 Cinitial = capacitance(x2_0, params)
-q_0 = params.Vbias * (Cinitial + params.cp)  # Initial charge
-V_0 = params.Vbias - (q_0 / (Cinitial + params.cp))  # Initial voltage
+q_0 = params.Vbias * (Cinitial + params.Cp)  # Initial charge
+V_0 = params.Vbias - (q_0 / (Cinitial + params.Cp))  # Initial voltage
 u0 = [x1_0, v1_0, x2_0, v2_0, q_0, V_0]
 
 # ------------------------- Solve Analytical Model -------------------------

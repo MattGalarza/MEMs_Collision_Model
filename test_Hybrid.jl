@@ -125,7 +125,29 @@ end
 
 # Damping force, Fd
 function damping(x2, x2dot, params)
-    Fd = 0
+    # Dynamic states
+    va = x2dot  # Translational velocity of moving electrode
+    vb = 0.0  # Translational velocity of fixed electrode (usually 0)
+
+    if abs(x2) < params.gp  # translation (non-collision)
+        # RHS damping force
+        h = params.gp - x2  # RHS gap expression
+        term1 = 12 * params.Tf * params.eta * (va - vb)
+        term2 = (2 * params.Leff * params.a + (2 * h + params.Leff * params.a) * log(h / (h + params.Leff * params.a)))
+        term3 = params.a^3 * (2 * h + params.Leff * params.a)
+        Fr = (term1 * term2) / term3
+        
+        # LHS damping force
+        h = params.gp + x2  # LHS gap expression
+        term1 = 12 * params.Tf * params.eta * (va - vb)
+        term2 = (2 * params.Leff * params.a + (2 * h + params.Leff * params.a) * log(h / (h + params.Leff * params.a)))
+        term3 = params.a^3 * (2 * h + params.Leff * params.a)
+        Fl = (term1 * term2) / term3   
+        
+        # Total force
+        Fd = params.c * (Fr + Fl)
+    else # rotation (collision)
+    end
     return Fd
 end
 
@@ -159,7 +181,7 @@ function capacitance(x2, params)
 end
 
 # Electrostatic force, Fe
-function electrostatic(x1, x2, q, Cvar, params)
+function electrostatic(x2, q, Cvar, params)
     # Calculate total capacitance
     Ctot = Cvar + params.Cp
     
@@ -190,7 +212,7 @@ function CoupledDynamics!(du, u, p, t)
     Fc = collision(u1, u3, params)
     Fd = damping(u3, u4, params)
     Cvar = capacitance(u2, params)
-    Ctot, Fe = electrostatic(u1, u3, u5, Cvar, params)
+    Ctot, Fe = electrostatic(u3, u5, Cvar, params)
     
     # State derivatives
     du[1] = u2              
@@ -383,12 +405,25 @@ x1dot = [u[2] for u in sol.u]
 x2 = [u[3] for u in sol.u]
 x2dot = [u[4] for u in sol.u]
 q = [u[5] for u in sol.u]
-Vout = [u[6] for u in sol.u]
+V = [u[6] for u in sol.u]
 
 # Flag points where collision events occurred
 ss_flags = [abs(x1_val) >= params.gss for x1_val in x1]
 collision_flags = [abs(x2_val) >= params.gp for x2_val in x2]
 
+# State components 
+p1 = plot(sol.t, x1, xlabel = "Time (s)", ylabel = "x1 (m)", title = "Shuttle Mass Displacement (x1)")
+display(p1)
+p2 = plot(sol.t, x1dot, xlabel = "Time (s)", ylabel = "x1dot (m/s)", title = "Shuttle Mass Velocity (x1dot)")
+display(p2)
+p3 = plot(sol.t, x2, xlabel = "Time (s)", ylabel = "x2 (m)", title = "Mobile Electrode Displacement (x2)")
+display(p3)
+p4 = plot(sol.t, x2dot, xlabel = "Time (s)", ylabel = "x2dot (m/s)", title = "Mobile Electrode Velocity (x2)")
+display(p4)
+p5 = plot(sol.t, q, xlabel = "Time (s)", ylabel = "q (C)", title = "Charge (q)")
+display(p5)
+p6 = plot(sol.t, V, xlabel = "Time (s)", ylabel = "V (V)", title = "Output Voltage (V)")
+display(p6)
 
 
 

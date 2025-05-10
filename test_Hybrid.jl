@@ -174,7 +174,7 @@ function capacitance(x2, params)
         Cairc = C0 + (Cinf - C0) * (log(1 + k * (abs(x2) - params.gp)) / log(1 + k * (params.a * params.Leff)))
         Cvarc = 1 / ((2 / Crl) + (1 / Cairc))
         # LHS capacitance (non-collision)
-        Cairnc = ((params.e * params.Tf) / params.a) * log((params.gp + abs(x2) + params.a * params.Leff) / (params.gp + abs(x2)))
+        Cairnc = ((params.e * params.Tf) / params.a) * NaNMath.log((params.gp + abs(x2) + params.a * params.Leff) / (params.gp + abs(x2)))
         Cvarnc = 1 / ((2 / Crl) + (1 / Cairnc))
         # Total variable capacitance
         Cvar = (params.N / 2) * (Cvarc + Cvarnc)
@@ -228,7 +228,7 @@ end
 # ------------------------- External Force -------------------------
 # External force parameters
 f = 20.0  # Frequency (Hz)
-alpha = 2.0  # Applied acceleration constant
+alpha = 1.5  # Applied acceleration constant
 g = 9.81  # Gravitational constant 
 A = alpha * g  # Sinusoidal amplitude
 t_ramp = 0.2  # Ramp-up duration (s)
@@ -292,6 +292,9 @@ end
 # Initialize event storage
 event_storage = EventStorage([], [])
 
+# Event counter to prevent Zeno chattering
+global event_counter = 0
+
 # Condition function to detect soft-stopper engagement, abs(x1) = gss
 function stopper_condition(u, t, integrator)
     # Extract shuttle position
@@ -301,15 +304,15 @@ function stopper_condition(u, t, integrator)
     return abs(x1) - params.gss
 end
 
-# Condition function to detect electrode collision, abs(x2) = gp 
+# Condition function to detect electrode collision with hysteresis
 function collision_condition(u, t, integrator)
     # Extract electrode position
     x2 = u[3]
     params = integrator.p[1]
-    # Root finding
+    
+    # Root find
     return abs(x2) - params.gp
 end
-
 # Affect function for soft-stopper engagement
 function stopper_affect!(integrator)
     ss_time = integrator.t
@@ -322,17 +325,49 @@ function stopper_affect!(integrator)
     set_proposed_dt!(integrator, integrator.dt/2)
 end
 
-# Affect function for electrode collision
+# Affect function for electrode collision with event counter
 function collision_affect!(integrator)
+    global event_counter
+    event_counter += 1
+    
     collision_time = integrator.t
     collision_state = copy(integrator.u)
     
-    # Store event in global storage
+    # Check for excessive events
+    if event_counter > 1000
+        @warn "Excessive collision events detected (>1000). Possible Zeno chattering at t=$(integrator.t)"
+        terminate!(integrator)
+        return
+    end
+    
+    # Get state values
+    x2 = integrator.u[3]
+    x2dot = integrator.u[4]
+    
+    # Apply coefficient of restitution when entering collision
+    # (when velocity and position have same sign - moving toward collision)
+    if abs(x2) >= params.gp && sign(x2) * sign(x2dot) > 0
+        coef_restitution = 0.85
+        integrator.u[4] = -coef_restitution * x2dot
+    end
+    
+    # Store event
     push!(event_storage.collision_events, (collision_time, collision_state))
     
-    # Tighten tolerances near discontinuity
-    set_proposed_dt!(integrator, integrator.dt/2)
+    # Tighten tolerances
+    set_proposed_dt!(integrator, integrator.dt/5)
 end
+
+# Create callbacks for event detection
+cb_collision = ContinuousCallback(collision_condition, collision_affect!, nothing; 
+                                 rootfind=true, save_positions=(true,false),
+                                 interp_points=20, 
+                                 abstol=1e-10)
+
+cb_soft_stopper = ContinuousCallback(stopper_condition, stopper_affect!, nothing; 
+                                    rootfind=true, save_positions=(true,false))
+
+cb_set = CallbackSet(cb_collision, cb_soft_stopper)
 
 # ------------------------- Initial Conditions -------------------------
 # Initial conditions
@@ -354,13 +389,6 @@ tspan = (0.0, 0.5) # simulation length
 abstol = 1e-10 # absolute solver tolerance
 reltol = 1e-8 # relative solver tolerance
 
-# Create callbacks for event detection
-cb_collision = ContinuousCallback(collision_condition, collision_affect!, nothing; 
-                                 rootfind=true, save_positions=(true,false))
-cb_soft_stopper = ContinuousCallback(stopper_condition, stopper_affect!, nothing; 
-                                    rootfind=true, save_positions=(true,false))
-cb_set = CallbackSet(cb_collision, cb_soft_stopper)
-
 # Problem parameters
 problem_params = (params, Fext_input)
 
@@ -368,8 +396,10 @@ problem_params = (params, Fext_input)
 prob = ODEProblem(CoupledDynamics!, u0, tspan, problem_params)
 
 # Solve the system using an appropriate solver for stiff systems with discontinuities
-sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e7, dtmin=1e-15, force_dtmin=true, save_everystep=true, saveat=0.0:0.0001:0.5)
-# sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e8, dtmin=1e-16, force_dtmin=true, save_everystep=false, saveat=0.0:0.0001:0.5, isoutofdomain=(u,p,t) -> false)
+sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e7, 
+            dtmin=1e-15, force_dtmin=true, save_everystep=false, saveat=0.0:0.0001:0.5)
+# sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e8, 
+#           dtmin=1e-16, force_dtmin=true, save_everystep=false, saveat=0.0:0.0001:0.5, isoutofdomain=(u,p,t) -> false)
 
 # If the system is too stiff, use CVODE_BDF from Sundials
 # sol = solve(prob, CVODE_BDF(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=Int(1e9))

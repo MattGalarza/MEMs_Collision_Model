@@ -124,7 +124,7 @@ function collision(x1, x2, params)
 end
 
 # Damping force, Fd
-function damping(x2, x2dot, params)
+function damping(x1, x2, x2dot, params)
     # Dynamic states
     va = x2dot  # Translational velocity of moving electrode
     vb = 0.0  # Translational velocity of fixed electrode (usually 0)

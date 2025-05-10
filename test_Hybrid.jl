@@ -1,6 +1,6 @@
 # ------------------------- Libraries -------------------------
 using Sundials, DifferentialEquations, Plots
-using Parameters, ForwardDiff, SpecialFunctions, Random
+using Parameters, ForwardDiff, SpecialFunctions, NaNMath, Random
 
 # ------------------------- Parameter Struct -------------------------
 # Parameters struct
@@ -159,10 +159,10 @@ function capacitance(x2, params)
     Crl = (params.e * params.ep * params.Leff * params.Tf) / params.Tp
     if abs(x2) < params.gp  # translation (non-collision)
         # RHS capacitance
-        Cairr = ((params.e * params.Tf) / params.a) * log((params.gp - x2 + params.a * params.Leff) / (params.gp - x2))
+        Cairr = ((params.e * params.Tf) / params.a) * NaNMath.log((params.gp - x2 + params.a * params.Leff) / (params.gp - x2))
         Cvarr = 1 / ((2 / Crl) + (1 / Cairr))
         # LHS capacitance
-        Cairl = ((params.e * params.Tf) / params.a) * log((params.gp + x2 + params.a * params.Leff) / (params.gp + x2))
+        Cairl = ((params.e * params.Tf) / params.a) * NaNMath.log((params.gp + x2 + params.a * params.Leff) / (params.gp + x2))
         Cvarl = 1 / ((2 / Crl) + (1 / Cairl))
         # Total variable capacitance
         Cvar = (params.N / 2) * (Cvarr + Cvarl)
@@ -228,7 +228,7 @@ end
 # ------------------------- External Force -------------------------
 # External force parameters
 f = 20.0  # Frequency (Hz)
-alpha = 3.0  # Applied acceleration constant
+alpha = 1.0  # Applied acceleration constant
 g = 9.81  # Gravitational constant 
 A = alpha * g  # Sinusoidal amplitude
 t_ramp = 0.2  # Ramp-up duration (s)
@@ -302,7 +302,7 @@ function collision_condition(u, t, integrator)
 end
 
 # Affect function for soft-stopper engagement
-function soft_stopper_affect!(integrator)
+function stopper_affect!(integrator)
     ss_time = integrator.t
     ss_state = copy(integrator.u)
     
@@ -352,13 +352,13 @@ u0 = [x1_0, v1_0, x2_0, v2_0, q_0, V_0]
 # Simulation parameters
 tspan = (0.0, 0.5) # simulation length
 # teval = () # evaluation steps
-abstol = 1e-9 # absolute solver tolerance
-reltol = 1e-6 # relative solver tolerance
+abstol = 1e-10 # absolute solver tolerance
+reltol = 1e-8 # relative solver tolerance
 
 # Create callbacks for event detection
 cb_collision = ContinuousCallback(collision_condition, collision_affect!, nothing; 
                                  rootfind=true, save_positions=(true,false))
-cb_soft_stopper = ContinuousCallback(soft_stopper_condition, soft_stopper_affect!, nothing; 
+cb_soft_stopper = ContinuousCallback(stopper_condition, stopper_affect!, nothing; 
                                     rootfind=true, save_positions=(true,false))
 cb_set = CallbackSet(cb_collision, cb_soft_stopper)
 
@@ -369,7 +369,8 @@ problem_params = (params, Fext_input)
 prob = ODEProblem(CoupledDynamics!, u0, tspan, problem_params)
 
 # Solve the system using an appropriate solver for stiff systems with discontinuities
-sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e7, dtmin=1e-15, force_dtmin=true, save_everystep=true, saveat=0.0:0.0001:0.5)
+# sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e7, dtmin=1e-15, force_dtmin=true, save_everystep=true, saveat=0.0:0.0001:0.5)
+sol = solve(prob, Rosenbrock23(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=1e8, dtmin=1e-16, force_dtmin=true, save_everystep=true, saveat=0.0:0.0001:0.5, isoutofdomain=(u,p,t) -> false)
 
 # If the system is too stiff, use CVODE_BDF from Sundials
 # sol = solve(prob, CVODE_BDF(), callback=cb_set, abstol=abstol, reltol=reltol, maxiters=Int(1e9))

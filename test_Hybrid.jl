@@ -124,10 +124,10 @@ function collision(x1, x2, params)
 end
 
 # Damping force, Fd
-function damping(x1, x2, x2dot, params)
+function damping(x2, x2dot, params)
     # Dynamic states
-    va = x2dot  # Translational velocity of moving electrode
-    vb = 0.0  # Translational velocity of fixed electrode (usually 0)
+    va = x2dot  # Translational velocity of mobile electrode
+    vb = 0.0  # Translational velocity of anchored electrode (usually 0)
 
     if abs(x2) < params.gp  # translation (non-collision)
         # RHS damping force
@@ -147,6 +147,7 @@ function damping(x1, x2, x2dot, params)
         # Total force
         Fd = params.c * (Fr + Fl)
     else # rotation (collision)
+
     end
     return Fd
 end

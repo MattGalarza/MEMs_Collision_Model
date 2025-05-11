@@ -108,7 +108,7 @@ function spring(x1, params)
     end
 
     # Total spring force
-    Fs = Fsp + Fss
+    Fs = Fsp + 0.01*Fss
 
     return Fs
 end
@@ -197,8 +197,8 @@ function electrostatic(x2, q, Cvar, params)
     return Ctot, Fe
 end
 
-# ------------------------- Filippov System Implementation -------------------------
-# Define a regularized Filippov dynamics function that smoothly transitions between regimes
+# ------------------------- Elastic Collision Dynamics -------------------------
+# Improved model with proper elastic collisions
 function CoupledDynamicsFilippov!(du, u, p, t)
     params, external_force = p
     
@@ -208,70 +208,80 @@ function CoupledDynamicsFilippov!(du, u, p, t)
     # Get external force
     Fext = external_force(t)
     
-    # Calculate the switching function (boundary condition)
-    phi = abs(u3) - params.gp  # Positive in collision regime, negative in non-collision
+    # Check if we're at a boundary
+    at_boundary = abs(u3) >= params.gp
     
-    # Regularization parameter (smaller = closer to ideal Filippov system)
-    epsilon = 1e-9  # 1 nanometer smoothing region
-    
-    # Compute the smooth transition function (Filippov's convex combination parameter)
-    # alpha = 0 in non-collision regime, alpha = 1 in collision regime
-    alpha = 0.5 * (1 + tanh(phi/epsilon))
-    
-    # Calculate forces in non-collision regime (alpha ≈ 0)
-    # Spring force (same in both regimes)
+    # Spring force calculation (common to both regimes)
     Fs = spring(u1, params)
     
-    # Non-collision regime forces
-    Fc_nc = -params.ke * (u3 - u1)  # Collision force pre-contact
-    Fd_nc = damping(u3, u4, params)  # Damping force pre-contact
-    Cvar_nc = capacitance(u3, params)  # Capacitance pre-contact
-    Ctot_nc, Fe_nc = electrostatic(u3, u5, Cvar_nc, params)  # Electrostatic force pre-contact
-    
-    # Collision regime forces
-    collision_side = sign(u3)
-    boundary_position = collision_side * params.gp
-    Fc_c = params.ke * (boundary_position - u1)  # Collision force during contact
-    
-    # In collision regime, damping is higher (to prevent bouncing)
-    c_contact = 0.1 * sqrt(params.ke * params.m2)  # Critical damping coefficient
-    Fd_c = -c_contact * u4  # Damping force during contact
-    
-    # Use the same electrostatic model in both regimes
-    Cvar_c = Cvar_nc
-    Ctot_c = Ctot_nc
-    Fe_c = Fe_nc
-    
-    # Filippov convex combination of forces
-    Fc = (1-alpha) * Fc_nc + alpha * Fc_c  # Blend collision forces
-    Fd = (1-alpha) * Fd_nc + alpha * Fd_c  # Blend damping forces
-    Ctot = Ctot_nc  # Capacitance doesn't change at discontinuity
-    Fe = Fe_nc  # Electrostatic force doesn't change at discontinuity
-    
-    # State derivatives - a smooth transition between regimes
-    du[1] = u2  # Shuttle velocity
-    du[2] = (Fs + (params.N / 2) * Fc) / params.m1 - Fext  # Shuttle acceleration
-    
-    # For position and velocity of the electrode, we transition to constrained motion
-    # in the collision regime:
-    
-    # In full collision (alpha ≈ 1), the electrode position is constrained to the boundary
-    # and velocity approaches zero
-    du[3] = (1-alpha) * u4  # Electrode velocity (approaches 0 in collision)
-    
-    # Electrode acceleration - continuous blend between regimes
-    du[4] = (1-alpha) * ((-Fc + Fd + Fe) / params.m2 - Fext) - 
-            alpha * (u4 / epsilon)  # Add strong damping in collision to drive velocity to zero
+    # Calculate forces based on position
+    if !at_boundary  # Away from boundary - normal dynamics
+        # Standard forces
+        Fc = 0.0  # Connection spring between shuttle and electrode
+        
+        try
+            Fd = damping(u3, u4, params)  # Normal damping
+        catch
+            Fd = -params.c * u4  # Simple fallback damping if calculation fails
+        end
+        
+        # No electrostatic force for mechanical testing
+        Fe = 0.0
+        Ctot = params.Cp
+        
+        # Normal dynamics
+        du[1] = u2  # Shuttle velocity
+        du[2] = (Fs + (params.N / 2) * Fc) / params.m1 - Fext  # Shuttle acceleration
+        du[3] = u4  # Electrode velocity
+        du[4] = (-Fc + Fd + Fe) / params.m2 - Fext  # Electrode acceleration
+    else  # At boundary - handle elastic collision
+        # Determine which boundary is hit
+        boundary_side = sign(u3)
+        boundary_pos = boundary_side * params.gp
+        
+        # Calculate forces
+        Fc = 0.0  # Using standard spring connection
+        Fd = 0.0  # No damping during instantaneous collision
+        Fe = 0.0  # No electrostatic force
+        Ctot = params.Cp
+        
+        # Check if electrode is moving toward or away from boundary
+        moving_toward_boundary = (boundary_side * u4 > 0)
+        
+        # Normal dynamics for shuttle (unchanged)
+        du[1] = u2
+        du[2] = (Fs + (params.N / 2) * Fc) / params.m1 - Fext
+        
+        if moving_toward_boundary  # Electrode is moving toward the boundary
+            # Apply elastic collision with coefficient of restitution
+            # For perfectly elastic collision, cor = 1.0
+            cor = 0.95  # 95% energy conservation (slight damping)
             
-    # Electrical dynamics (same in both regimes)
-    du[5] = (params.Vbias - (u5 / Ctot)) / params.Rload  # Charge dynamics
-    du[6] = (params.Vbias - u5 / Ctot - u6) / (params.Rload * Ctot)  # Voltage dynamics
+            # Reflection direction should be opposite of current velocity
+            reflected_velocity = -boundary_side * abs(u4) * cor
+            
+            # Set derivatives to reflect velocity and move away from boundary
+            du[3] = reflected_velocity
+            
+            # Additional acceleration to move away from boundary
+            repulsion_accel = -boundary_side * 1e-6  # Small repulsion to ensure separation
+            du[4] = (-Fc) / params.m2 - Fext + repulsion_accel
+        else  # Already moving away from boundary
+            # Normal dynamics
+            du[3] = u4
+            du[4] = (-Fc) / params.m2 - Fext
+        end
+    end
+    
+    # Electrical dynamics (inactive for mechanical testing)
+    du[5] = 0.0
+    du[6] = 0.0
 end
 
 # ------------------------- External Force -------------------------
 # External force parameters
 f = 20.0  # Frequency (Hz)
-alpha = 3.0  # Applied acceleration constant (increased from 2.0 to ensure collisions occur)
+alpha = 2.5  # Applied acceleration constant
 g = 9.81  # Gravitational constant 
 A = alpha * g  # Sinusoidal amplitude
 t_ramp = 0.2  # Ramp-up duration (s)
@@ -338,22 +348,51 @@ q_0 = params.Vbias * (Cinitial + params.Cp)  # Initial charge
 V_0 = params.Vbias - (q_0 / (Cinitial + params.Cp))  # Initial voltage
 u0 = [x1_0, v1_0, x2_0, v2_0, q_0, V_0]
 
-# ------------------------- Solve Using Filippov Approach -------------------------
+# ------------------------- Solve System -------------------------
 # Simulation parameters
-tspan = (0.0, 0.5)  # simulation length
+tspan = (0.0, 0.5) # simulation length
 abstol = 1e-8  # absolute solver tolerance
 reltol = 1e-6  # relative solver tolerance
 
 # Problem parameters
 problem_params = (params, Fext_input)
 
-# Define the ODE problem with Filippov dynamics
+# Define the ODE problem
 prob = ODEProblem(CoupledDynamicsFilippov!, u0, tspan, problem_params)
 
-# Solve the system using an appropriate solver for stiff systems
-sol = solve(prob, CVODE_BDF(), abstol=abstol, reltol=reltol, 
-            maxiters=1e7, dtmin=1e-12, force_dtmin=true, 
-            save_everystep=false, saveat=0.0:0.001:0.5)
+# Add adaptive time stepping refinement near threshold
+function affect_precision!(integrator)
+    x1 = integrator.u[1]
+    
+    # Check if near soft-stopper threshold
+    if abs(abs(x1) - params.gss) < 1e-7  # Within 0.1 μm of threshold
+        # Reduce step size for better resolution near threshold
+        set_proposed_dt!(integrator, integrator.dt/2)
+    end
+end
+
+# Create discrete callback for precision control
+precision_cb = DiscreteCallback(
+    (u, t, integrator) -> true,  # Always active (checked at each step)
+    affect_precision!
+)
+
+# Combine with existing callbacks
+cb_set = CallbackSet(collision_cb, precision_cb)
+
+# Use the combined callback set in the solver
+sol = solve(prob, Rodas5(), 
+            callback=cb_set,
+            abstol=1e-8, reltol=1e-6, 
+            maxiters=Int(5e8),
+            dtmin=1e-14,
+            force_dtmin=true,
+            save_everystep=false, 
+            saveat=0.0:0.001:0.5)
+
+# Alternative solver options if needed
+# sol = solve(prob, TRBDF2(), abstol=abstol, reltol=reltol, maxiters=Int(1e7))
+# sol = solve(prob, Rodas5(), abstol=abstol, reltol=reltol, maxiters=Int(1e7))
 
 # ------------------------- Solution Analysis -------------------------
 # Verify the solution structure
@@ -372,21 +411,37 @@ x2dot = [u[4] for u in sol.u]
 q = [u[5] for u in sol.u]
 V = [u[6] for u in sol.u]
 
-# Identify collision regions
-collision_flags = [abs(x2_val) >= params.gp for x2_val in x2]
-collision_indices = findall(collision_flags)
-collision_times = times[collision_indices]
-println("\nCollision regions detected: ", length(collision_indices) > 0 ? "Yes" : "No")
-println("Number of timepoints in collision: ", length(collision_indices))
+# Detect collision events (not collision states)
+collision_events = Float64[]
+for i in 2:length(sol.t)
+    prev_x2 = abs(sol.u[i-1][3])
+    curr_x2 = abs(sol.u[i][3])
+    
+    # Detect crossing of boundary in either direction
+    if (prev_x2 < params.gp && curr_x2 >= params.gp) || 
+       (prev_x2 >= params.gp && curr_x2 < params.gp)
+        push!(collision_events, sol.t[i])
+    end
+end
 
-# ------------------------- Force Capture and Plotting -------------------------
-# Initialize arrays to store forces and the blending parameter
+println("\nNumber of collision events: ", length(collision_events))
+if !isempty(collision_events)
+    for (i, t) in enumerate(collision_events)
+        println("  Event $i at t = $t")
+    end
+end
+
+# Also track when at boundary (for plotting)
+at_boundary = [abs(x2_val) >= params.gp for x2_val in x2]
+boundary_indices = findall(at_boundary)
+
+# ------------------------- Force Calculation and Plotting -------------------------
+# Initialize arrays to store forces
 Fs_array = Float64[] # Suspension spring force
 Fc_array = Float64[] # Collision force
 Fd_array = Float64[] # Damping force
 Fe_array = Float64[] # Electrostatic force
 Fext_array = Float64[] # External force
-alpha_array = Float64[] # Filippov blending parameter
 
 # Iterate over each solution point to compute forces
 for (i, t) in enumerate(sol.t)
@@ -394,36 +449,29 @@ for (i, t) in enumerate(sol.t)
     u_state = sol.u[i]
     u1, u2, u3, u4, u5, u6 = u_state
     
-    # Calculate the blending parameter
-    phi = abs(u3) - params.gp
-    epsilon = 1e-9
-    alpha = 0.5 * (1 + tanh(phi/epsilon))
-    push!(alpha_array, alpha)
-    
-    # Compute forces using the model functions
+    # Compute forces
     # Fs - Spring force
     Fs = spring(u1, params)
     push!(Fs_array, Fs)
     
-    # Fc - Collision force (blended)
-    Fc_nc = -params.ke * (u3 - u1)
-    collision_side = sign(u3)
-    boundary_position = collision_side * params.gp
-    Fc_c = params.ke * (boundary_position - u1)
-    Fc = (1-alpha) * Fc_nc + alpha * Fc_c
+    # Fc - Collision force
+    Fc = -params.ke * (u3 - u1)  # Use consistent expression for plotting
     push!(Fc_array, Fc)
     
-    # Fd - Damping force (blended)
-    Fd_nc = damping(u3, u4, params)
-    c_contact = 0.1 * sqrt(params.ke * params.m2)
-    Fd_c = -c_contact * u4
-    Fd = (1-alpha) * Fd_nc + alpha * Fd_c
+    # Fd - Damping force
+    if abs(u3) < params.gp
+        try
+            Fd = damping(u3, u4, params)
+        catch
+            Fd = -params.c * u4  # Simple fallback
+        end
+    else
+        Fd = 0.0  # No damping at boundary
+    end
     push!(Fd_array, Fd)
     
-    # Fe - Electrostatic force
-    Cvar = capacitance(u3, params)
-    Ctot, Fe = electrostatic(u3, u5, Cvar, params)
-    push!(Fe_array, Fe)
+    # Fe - Electrostatic force (zero for mechanical test)
+    push!(Fe_array, 0.0)
     
     # Fext - External force
     Fext = Fext_input(t)
@@ -439,63 +487,82 @@ p3 = plot(sol.t, x2, xlabel = "Time (s)", ylabel = "x2 (m)", title = "Mobile Ele
 display(p3)
 p4 = plot(sol.t, x2dot, xlabel = "Time (s)", ylabel = "x2dot (m/s)", title = "Mobile Electrode Velocity (x2dot)")
 display(p4)
-p5 = plot(sol.t, q, xlabel = "Time (s)", ylabel = "q (C)", title = "Charge (q)")
-display(p5)
-p6 = plot(sol.t, V, xlabel = "Time (s)", ylabel = "V (V)", title = "Output Voltage (V)")
-display(p6)
 
-# Plotting the forces
-p7 = plot(sol.t, Fs_array, xlabel = "Time (s)", ylabel = "Fs (N)", title = "Suspension Spring Force")
-display(p7)
-p8 = plot(sol.t, Fc_array, xlabel = "Time (s)", ylabel = "Fc (N)", title = "Collision Force")
-display(p8)
-p9 = plot(sol.t, Fd_array, xlabel = "Time (s)", ylabel = "Fd (N)", title = "Damping Force")
-display(p9)
-p10 = plot(sol.t, Fe_array, xlabel = "Time (s)", ylabel = "Fe (N)", title = "Electrostatic Force")
-display(p10)
-p11 = plot(sol.t, Fext_array, xlabel = "Time (s)", ylabel = "Fext (N)", title = "External Force")
-display(p11)
-
-# Plot the Filippov blending parameter
-p12 = plot(sol.t, alpha_array, xlabel = "Time (s)", ylabel = "alpha", title = "Filippov Blending Parameter (alpha)",
-          yticks=0:0.2:1, linewidth=2)
-display(p12)
-
-# Plot collision status for easier visualization
-p13 = plot(sol.t, collision_flags, xlabel = "Time (s)", ylabel = "In Collision", title = "Collision Status", 
-          seriestype=:step, yticks=[0, 1], linewidth=2)
-display(p13)
-
-# Add combined plots for additional insights
-# Plot displacement with collision boundary
-p14 = plot(sol.t, x2, label="Electrode Position (x2)", linewidth=2)
-plot!(sol.t, fill(params.gp, length(sol.t)), label="Collision Boundary (+gp)", linestyle=:dash, linewidth=1)
-plot!(sol.t, fill(-params.gp, length(sol.t)), label="Collision Boundary (-gp)", linestyle=:dash, linewidth=1)
+# Highlight collision events on position plot
+p5 = plot(sol.t, x2, label="Electrode Position", linewidth=2)
+# Add vertical lines at collision events
+for t in collision_events
+    plot!([t, t], [minimum(x2), maximum(x2)], linestyle=:dash, color=:red, label=nothing, linewidth=1)
+end
+# Add boundary lines
+plot!(sol.t, fill(params.gp, length(sol.t)), label="Boundary (+gp)", linestyle=:dash, color=:green)
+plot!(sol.t, fill(-params.gp, length(sol.t)), label="Boundary (-gp)", linestyle=:dash, color=:green)
 xlabel!("Time (s)")
 ylabel!("Position (m)")
-title!("Electrode Position with Collision Boundaries")
-display(p14)
+title!("Electrode Position with Collision Events")
+display(p5)
 
-# Plot total forces on electrode
-total_force_electrode = [(-Fc_array[i] + Fd_array[i] + Fe_array[i] - Fext_array[i]) for i in 1:length(sol.t)]
-p15 = plot(sol.t, total_force_electrode, xlabel = "Time (s)", ylabel = "Force (N)", 
-          title = "Total Force on Electrode", linewidth=2)
-display(p15)
+# Force plots
+p6 = plot(sol.t, Fs_array, xlabel = "Time (s)", ylabel = "Fs (N)", title = "Suspension Spring Force")
+display(p6)
+p7 = plot(sol.t, Fc_array, xlabel = "Time (s)", ylabel = "Fc (N)", title = "Collision Force")
+display(p7)
+p8 = plot(sol.t, Fd_array, xlabel = "Time (s)", ylabel = "Fd (N)", title = "Damping Force")
+display(p8)
+p9 = plot(sol.t, Fe_array, xlabel = "Time (s)", ylabel = "Fe (N)", title = "Electrostatic Force (Zero)")
+display(p9)
+p10 = plot(sol.t, Fext_array, xlabel = "Time (s)", ylabel = "Fext (N)", title = "External Force")
+display(p10)
 
-# Compare displacement difference and collision force
-x1_minus_x2 = [x1[i] - x2[i] for i in 1:length(sol.t)]
-p16 = plot(sol.t, x1_minus_x2, label="x1 - x2", xlabel = "Time (s)", ylabel = "Distance (m)", 
-          title = "Displacement Difference (x1 - x2)")
-display(p16)
+# Combined forces plot
+p11 = plot(sol.t, [Fs_array Fc_array Fe_array Fd_array], 
+          label=["Spring" "Collision" "Electrostatic" "Damping"],
+          xlabel = "Time (s)", ylabel = "Force (N)", title = "Force Comparison")
+display(p11)
 
-# Phase plot of electrode (position vs velocity)
-p17 = plot(x2, x2dot, xlabel = "x2 (m)", ylabel = "x2dot (m/s)", 
+# Phase portrait of electrode
+p12 = plot(x2, x2dot, xlabel = "x2 (m)", ylabel = "x2dot (m/s)", 
           title = "Phase Portrait of Electrode", seriestype=:scatter,
           markersize=2, markerstrokewidth=0, alpha=0.5)
-display(p17)
+display(p12)
 
-# Scatter plot of collision force vs displacement difference
-p18 = plot(x1_minus_x2, Fc_array, seriestype=:scatter, markersize=2, markerstrokewidth=0,
-          xlabel = "x1 - x2 (m)", ylabel = "Fc (N)", title = "Collision Force vs. Displacement Difference",
-          alpha=0.5)
-display(p18)
+# Energy analysis
+# Calculate kinetic and potential energies
+KE_shuttle = [0.5 * params.m1 * v^2 for v in x1dot]
+KE_electrode = [0.5 * params.m2 * v^2 for v in x2dot]
+PE_spring = [0.5 * params.k1 * x^2 for x in x1]
+PE_conn = [0.5 * params.ke * (x1[i] - x2[i])^2 for i in 1:length(x1)]
+total_energy = KE_shuttle + KE_electrode + PE_spring + PE_conn
+
+# Energy plot
+p13 = plot(sol.t, [KE_shuttle KE_electrode PE_spring PE_conn total_energy], 
+          label=["KE Shuttle" "KE Electrode" "PE Spring" "PE Connection" "Total Energy"],
+          xlabel = "Time (s)", ylabel = "Energy (J)", title = "Energy Components")
+display(p13)
+
+# Plot the sign of x1 vs time
+p_sign = plot(sol.t, sign.(x1), ylabel="sign(x1)", xlabel="Time (s)")
+display(p_sign)
+
+# Plot both the absolute value of x1 and the soft-stopper threshold
+p_abs = plot(sol.t, abs.(x1), label="|x1|")
+plot!(sol.t, fill(params.gss, length(sol.t)), label="gss", linestyle=:dash)
+ylabel!("Position (m)")
+xlabel!("Time (s)")
+display(p_abs)
+
+# Plot the external force
+p_ext = plot(sol.t, [Fext_input(t) for t in sol.t], ylabel="Fext (N)", xlabel="Time (s)")
+display(p_ext)
+
+# Plot soft-stopper force component separately
+Fss_array = Float64[]
+for x_val in x1
+    if abs(x_val) < params.gss
+        push!(Fss_array, 0.0)
+    else
+        push!(Fss_array, -params.kss * (abs(x_val) - params.gss) * sign(x_val))
+    end
+end
+p_fss = plot(sol.t, Fss_array, ylabel="Fss (N)", xlabel="Time (s)")
+display(p_fss)

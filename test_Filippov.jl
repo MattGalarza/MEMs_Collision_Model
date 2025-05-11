@@ -1,459 +1,136 @@
-using DifferentialEquations, Plots
 
-# Parameters
-m₁ = 1.0e-7  # kg, shuttle mass
-m₂ = 5.0e-8  # kg, mobile electrode mass
-k₁ = 1.0     # N/m, primary spring constant
-kₛₛ = 10.0   # N/m, suspension spring constant
-kₑ = 5.0     # N/m, collision spring constant
-gₛₛ = 0.1e-6 # m, suspension spring gap
-gₚ = 0.5e-6  # m, collision threshold
-R = 1.0e6    # Ω, resistance
-VDC = 5.0    # V, applied voltage
-Fapplied = 0.0 # N, applied force
-N = 2        # Number of electrodes
+# ------------------------- Libraries -------------------------
+using Sundials, DifferentialEquations, Plots
+using Parameters, ForwardDiff, SpecialFunctions, NaNMath, Random
 
-# Capacitance parameters
-a = 0.2e-6   # m, distance parameter
-ε = 8.85e-12 # F/m, permittivity of free space
-εₚ = 1.0     # relative permittivity
-Leff = 50e-6 # m, effective length
-Tf = 2e-6    # m, finger thickness
-Tp = 2e-6    # m, plate thickness
-Cp = 1e-15   # F, parasitic capacitance
-η = 1.8e-5   # Pa·s, air viscosity
-c = 0.8      # damping coefficient
+# ------------------------- Parameter Struct -------------------------
+@with_kw mutable struct MEMSParams{T<:Real}
+    g0::T=14e-6; Tp::T=120e-9; Tf::T=25e-6
+    wt::T=9e-6; wb::T=30e-6; ws::T=14.7e-6; wss::T=14e-6
+    Leff::T=400e-6; Lff::T=450e-6; Lsp::T=1400e-6; Lss::T=1000e-6; gss::T=14e-6
+    m1::T=2.0933e-6; rho::T=2330.0; E::T=170e9; e::T=8.85e-12; ep::T=3.2
+    eta::T=1.849e-5; c::T=0.015
+    N::T=160.0; Cp::T=5e-12; Vbias::T=3.0; Rload::T=0.42e6
+    gp::T=0.0; a::T=0.0; m2::T=0.0; I::T=0.0; ke::T=0.0; k1::T=0.0; k3::T=0.0; kss::T=0.0
+end
 
-# Calculate suspension spring force
-function calculate_suspension_force(x₁, k₁, kₛₛ, gₛₛ)
-    Fₛₚ = -k₁ * x₁
-    if abs(x₁) < gₛₛ
-        Fₛₛ = 0.0
+# ------------------------- Create Dependent Parameters -------------------------
+function create_params(; kwargs...)
+    p=MEMSParams(;kwargs...)
+    p.gp=p.g0-2p.Tp; p.a=(p.wb-p.wt)/p.Leff
+    p.I=(1/48)*p.Lff*p.Tf*(p.wb+p.wt)*(p.wb^2+p.wt^2)
+    modal=0.236+0.045*(1-p.wt/p.wb)
+    phys=0.5*p.Lff^2*p.rho*p.Tf*(p.wb+p.wt); p.m2=modal*phys
+    F=1; num=p.E*p.Tf*p.wt^2*(p.wb-p.wt)^3
+    den=6F*p.Lff^3*((p.wb-3p.wt)*(p.wb-p.wt)+2p.wt^2*(log(p.Lff*p.wb)-log(p.Lff*p.wt)))
+    p.ke=num/den
+    p.k1=(4/6)*(p.E*p.Tf*p.ws^3)/(p.Lsp^3)
+    p.k3=(18/25)*(p.E*p.Tf*p.ws)/(p.Lsp^3)
+    p.kss=(p.E*p.Tf*p.wss^3)/(p.Lss^3)
+    return p
+end
+params=create_params();
+
+# ------------------------- Filippov Regularization -------------------------
+const ε=1e-4  # widened smoothing
+smoothH(x;ε=ε)=0.5*(1+tanh(x/ε))
+smoothS(x;ε=ε)=tanh(x/ε)
+
+# ------------------------- Force Expressions -------------------------
+function spring_fss(x1,p)
+    Fsp=-p.k1*x1
+    Δ=abs(x1)-p.gss
+    Fss=-p.kss*Δ*smoothS(x1;ε=ε)
+    α=smoothH(Δ;ε=ε)
+    return Fsp*(1-α)+Fss*α
+end
+
+function collision_f(p,x1,x2)
+    Δ=abs(x2)-p.gp
+    Fc0=-p.ke*(x2-x1)
+    Fc1= p.ke*(smoothS(x2;ε=ε)*p.gp - x1)
+    β=smoothH(Δ;ε=ε)
+    return Fc0*(1-β)+Fc1*β
+end
+
+function damping_f(p,x2,v)
+    Δ=abs(x2)-p.gp; Fd0=0.0
+    if abs(x2)<p.gp
+        h=p.gp-x2; t1=12*p.Tf*p.eta*v
+        t2=(2*p.Leff*p.a+(2h+p.Leff*p.a)*log(h/(h+p.Leff*p.a)))
+        t3=p.a^3*(2h+p.Leff*p.a); Fr=(t1*t2)/t3
+        h2=p.gp+x2; t2=(2*p.Leff*p.a+(2h2+p.Leff*p.a)*log(h2/(h2+p.Leff*p.a)))
+        Fl=(t1*t2)/t3; Fd0=p.c*(Fr+Fl)
+    end
+    Fd1=-1e3*v   # small viscous bleed
+    β=smoothH(Δ;ε=ε)
+    return Fd0*(1-β)+Fd1*β
+end
+
+function capacitance(x2,p)
+    Crl=(p.e*p.ep*p.Leff*p.Tf)/p.Tp
+    if abs(x2)<p.gp
+        Cr=((p.e*p.Tf)/p.a)*NaNMath.log((p.gp-x2+p.a*p.Leff)/(p.gp-x2))
+        Cl=((p.e*p.Tf)/p.a)*NaNMath.log((p.gp+x2+p.a*p.Leff)/(p.gp+x2))
+        C1=1/((2/p.Cp)+(1/Cr)); C2=1/((2/p.Cp)+(1/Cl))
+        return (p.N/2)*(C1+C2)
     else
-        Fₛₛ = -kₛₛ * (abs(x₁) - gₛₛ) * sign(x₁)
-    end
-    return Fₛₚ + Fₛₛ
-end
-
-# Calculate collision force
-function calculate_collision_force(x₁, x₂, kₑ, gₚ)
-    if abs(x₂) < gₚ
-        return -kₑ * (x₁ - x₂)
-    else
-        return -kₑ * (x₁ - x₂) + kₑ * (abs(x₂) - gₚ) * sign(x₂)
+        k=(2*p.Tp)/(p.a*p.Leff); C0=7.1053e-14; Cinf=9.952e-11
+        Cr=C0+(Cinf-C0)*(log(1+k*(abs(x2)-p.gp))/log(1+k*p.a*p.Leff))
+        C1=1/((2/p.Cp)+(1/Cr)); C2=C1
+        return (p.N/2)*(C1+C2)
     end
 end
 
-# Calculate capacitance for pre-collision mode (|x₂| < gₚ)
-function calculate_capacitance_pre_collision(x₂, a, ε, εₚ, gₚ, Leff, Tf, Tp, Cp)
-    # Capacitance between rigid insulator and electrode
-    Cᵣᵢ = (ε * εₚ * Leff * Tf) / Tp
-    
-    # Right side air capacitance
-    Cₐᵢᵣ₋ᵣ = (ε * Tf / (2 * a)) * log((gₚ - x₂ + 2 * a * Leff) / (gₚ - x₂))
-    
-    # Left side air capacitance
-    Cₐᵢᵣ₋ₗ = (ε * Tf / (2 * a)) * log((gₚ + x₂ + 2 * a * Leff) / (gₚ + x₂))
-    
-    # Variable capacitances
-    Cᵥₐᵣ₋ᵣ = 1.0 / (2.0 / Cᵣᵢ + 1.0 / Cₐᵢᵣ₋ᵣ)
-    Cᵥₐᵣ₋ₗ = 1.0 / (2.0 / Cᵣᵢ + 1.0 / Cₐᵢᵣ₋ₗ)
-    
-    # Total variable capacitance
-    Cᵥₐᵣ = (N / 2) * (Cᵥₐᵣ₋ᵣ + Cᵥₐᵣ₋ₗ)
-    
-    return Cᵥₐᵣ
+function electrostatic(x2,q,Cvar,p)
+    Ctot=Cvar+p.Cp
+    h=1e-10; C1=capacitance(x2-h,p); C2=capacitance(x2+h,p)
+    dC=(C2-C1)/(2h); Fe=(-0.5*(q^2/Ctot^2)*dC)/(p.N/2)
+    return Ctot,Fe
 end
 
-# Calculate capacitance for post-collision mode (|x₂| >= gₚ)
-function calculate_capacitance_post_collision(x₂, a, ε, εₚ, gₚ, Leff, Tf, Tp, Cp)
-    # Capacitance between rigid insulator and electrode
-    Cᵣᵢ = (ε * εₚ * Leff * Tf) / Tp
-    
-    # Contact side air capacitance
-    Cₐᵢᵣ₋ₖ = (ε * Tf * Leff / abs(x₂)) * log((2 * Tp + abs(x₂)) / (2 * Tp))
-    
-    # Non-contact side air capacitance (same as left side in pre-collision)
-    Cₐᵢᵣ₋ₙₖ = (ε * Tf / (2 * a)) * log((gₚ + x₂ + 2 * a * Leff) / (gₚ + x₂))
-    
-    # Variable capacitances
-    Cᵥₐᵣ₋ₖ = 1.0 / (2.0 / Cᵣᵢ + 1.0 / Cₐᵢᵣ₋ₖ)
-    Cᵥₐᵣ₋ₙₖ = 1.0 / (2.0 / Cᵣᵢ + 1.0 / Cₐᵢᵣ₋ₙₖ)
-    
-    # Total variable capacitance
-    Cᵥₐᵣ = (N / 2) * (Cᵥₐᵣ₋ₖ + Cᵥₐᵣ₋ₙₖ)
-    
-    return Cᵥₐᵣ
+# ------------------------- Filippov Dynamics -------------------------
+function CoupledDynamics_Filippov!(du,u,p_,t)
+    p,Fext=p_
+    x1,v1,x2,v2,q,V=u
+    Fs=spring_fss(x1,p); Fc=collision_f(p,x1,x2)
+    Fd=damping_f(p,x2,v2); Cvar=capacitance(x2,p)
+    Ctot,Fe=electrostatic(x2,q,Cvar,p)
+    du[1]=v1; du[2]=(Fs+(p.N/2)*Fc)/p.m1 - Fext(t)
+    du[3]=v2; du[4]=(-Fc+Fd+Fe)/p.m2 - Fext(t)
+    du[5]=(p.Vbias - q/Ctot)/p.Rload
+    du[6]=(p.Vbias - q/Ctot - V)/(p.Rload*Ctot)
 end
 
-# Calculate electrostatic force
-function calculate_electrostatic_force(x₂, q, Cᵥₐᵣ, Cp)
-    Ctotal = Cᵥₐᵣ + Cp
-    
-    # Calculate derivative of Cᵥₐᵣ with respect to x₂ using finite difference
-    δ = 1e-9
-    Cᵥₐᵣ_plus = calculate_capacitance_pre_collision(x₂ + δ, a, ε, εₚ, gₚ, Leff, Tf, Tp, Cp)
-    Cᵥₐᵣ_minus = calculate_capacitance_pre_collision(x₂ - δ, a, ε, εₚ, gₚ, Leff, Tf, Tp, Cp)
-    dCᵥₐᵣ_dx₂ = (Cᵥₐᵣ_plus - Cᵥₐᵣ_minus) / (2 * δ)
-    
-    # Electrostatic force
-    Fe = -(2 / N) * (q^2 / (2 * Ctotal^2)) * dCᵥₐᵣ_dx₂
-    
-    return Fe
+# ------------------------- External Force -------------------------
+f=20.0; A=2*9.81; t_ramp=0.2; use_ramp=true
+function sine_force(t;A=A,f=f,use_ramp=use_ramp,t_ramp=t_ramp)
+    ramp=use_ramp&&t<t_ramp?t/t_ramp:1.0; return A*ramp*sin(2π*f*t)
 end
-
-# Calculate damping force for pre-collision (|x₂| < gₚ)
-function calculate_damping_force_pre_collision(x₂, ẋ₂)
-    # Left side
-    A_L1 = ((gₚ + x₂) * Leff / (gₚ + x₂ + 2 * a)) * ẋ₂
-    A_L2 = (12 * η * a^(-2) / (2 * (gₚ + x₂) + a * Leff)) * ẋ₂
-    
-    F_dL = Tf * (Leff * A_L2 - (6 * η * Leff / (a * (gₚ + x₂) * (gₚ + x₂ + a * Leff))) * A_L1 +
-                6 * η * Leff * a^(-4) * (gₚ + x₂ + a * Leff) * ẋ₂ +
-                12 * η * a^(-3) * ẋ₂ * log(abs((gₚ + x₂) / (gₚ + x₂ + a * Leff))))
-    
-    # Right side
-    A_R1 = -((gₚ - x₂) * Leff / (gₚ - x₂ + 2 * a)) * ẋ₂
-    A_R2 = (12 * η * a^(-2) / (2 * (gₚ - x₂) + a * Leff)) * ẋ₂
-    
-    F_dR = Tf * (Leff * A_R2 - (6 * η * Leff / (a * (gₚ - x₂) * (gₚ - x₂ + a * Leff))) * A_R1 +
-                6 * η * Leff * a^(-4) * (gₚ - x₂ + a * Leff) * ẋ₂ +
-                12 * η * a^(-3) * ẋ₂ * log(abs((gₚ - x₂) / (gₚ - x₂ + a * Leff))))
-    
-    return -c * (F_dL + F_dR)
+function white_noise_force(t;amplitude=9.81,seed=12345,dt=0.001)
+    rng=Random.MersenneTwister(seed); k=floor(Int,t/dt)
+    Random.seed!(rng,seed); for _ in 1:k rand(rng) end
+    return amplitude*(2*rand(rng)-1)
 end
+Fext_input=t->sine_force(t)
 
-# Calculate damping force for post-collision (|x₂| >= gₚ)
-function calculate_damping_force_post_collision(x₂, ẋ₂)
-    # Use pre-collision damping as an approximation with adjustment
-    base_damping = calculate_damping_force_pre_collision(sign(x₂) * (2*gₚ - abs(x₂)), ẋ₂)
-    
-    # Add additional damping due to deformation
-    deformation_factor = 1.5 * (abs(x₂) / gₚ - 1.0)
-    
-    return base_damping * (1.0 + deformation_factor)
-end
+# ------------------------- Initial Conditions -------------------------
+x1_0,v1_0=0.0,0.0; x2_0,v2_0=0.0,0.0
+C0=capacitance(x2_0,params); q0=params.Vbias*(C0+params.Cp)
+V0=params.Vbias - q0/(C0+params.Cp)
+u0=[x1_0,v1_0,x2_0,v2_0,q0,V0]
 
-#===============================
-    Filippov Implementation
-===============================
-# This approach handles the discontinuity using Filippov's convex combination
-# of vector fields when exactly on the switching surface
-=#
-function filippov_system!(du, u, p, t)
-    # Unpack state variables: [x₁, ẋ₁, x₂, ẋ₂, q]
-    z₁, z₂, z₃, z₄, z₅ = u
-    
-    # Define the switching condition: |x₂| - gₚ
-    h = abs(z₃) - gₚ
-    
-    # Calculate suspension spring force
-    Fs = calculate_suspension_force(z₁, k₁, kₛₛ, gₛₛ)
-    
-    # Define vector fields for both modes
-    function pre_collision_dynamics(u)
-        z₁, z₂, z₃, z₄, z₅ = u
-        
-        # Calculate forces for pre-collision mode
-        Fc = -kₑ * (z₁ - z₃)
-        Cᵥₐᵣ = calculate_capacitance_pre_collision(z₃, a, ε, εₚ, gₚ, Leff, Tf, Tp, Cp)
-        Fe = calculate_electrostatic_force(z₃, z₅, Cᵥₐᵣ, Cp)
-        Fd = calculate_damping_force_pre_collision(z₃, z₄)
-        Ctotal = Cᵥₐᵣ + Cp
-        
-        # State derivatives
-        dz₁ = z₂
-        dz₂ = (1/m₁) * (Fs + N*Fc - m₁*Fapplied)
-        dz₃ = z₄
-        dz₄ = (1/m₂) * (Fc + Fd + Fe - m₂*Fapplied)
-        dz₅ = (1/R) * (VDC - z₅/Ctotal)
-        
-        return [dz₁, dz₂, dz₃, dz₄, dz₅]
-    end
-    
-    function post_collision_dynamics(u)
-        z₁, z₂, z₃, z₄, z₅ = u
-        
-        # Calculate forces for post-collision mode
-        Fc = -kₑ * (z₁ - z₃) + kₑ * (abs(z₃) - gₚ) * sign(z₃)
-        Cᵥₐᵣ = calculate_capacitance_post_collision(z₃, a, ε, εₚ, gₚ, Leff, Tf, Tp, Cp)
-        Fe = calculate_electrostatic_force(z₃, z₅, Cᵥₐᵣ, Cp)
-        Fd = calculate_damping_force_post_collision(z₃, z₄)
-        Ctotal = Cᵥₐᵣ + Cp
-        
-        # State derivatives with modified mass (rotation mode)
-        dz₁ = z₂
-        dz₂ = (1/m₁) * (Fs + N*Fc - m₁*Fapplied)
-        dz₃ = z₄
-        dz₄ = (1/(2*m₂)) * (Fc + Fd + Fe - m₂*Fapplied)  # Note the modified mass
-        dz₅ = (1/R) * (VDC - z₅/Ctotal)
-        
-        return [dz₁, dz₂, dz₃, dz₄, dz₅]
-    end
-    
-    # Filippov's method for handling the discontinuity
-    if abs(h) < 1e-10  # If almost exactly on the switching surface
-        # Calculate normal vector to switching surface
-        grad_h = [0.0, 0.0, sign(z₃), 0.0, 0.0]
-        
-        # Calculate vector fields at the current point
-        f1 = pre_collision_dynamics(u)
-        f2 = post_collision_dynamics(u)
-        
-        # Calculate Lie derivatives (rate of change of h along f1 and f2)
-        Lfh1 = dot(grad_h, f1)
-        Lfh2 = dot(grad_h, f2)
-        
-        # Check for sliding mode
-        if Lfh1 > 0 && Lfh2 < 0
-            # Use convex combination for sliding mode
-            α = Lfh2 / (Lfh2 - Lfh1)
-            du .= α * f1 + (1-α) * f2
-            
-            # Store information about sliding mode for visualization
-            # (In a full implementation, you'd use a global variable or integrator cache)
-            # sliding_mode[end+1] = (t, true)
-        else
-            # Not a sliding mode, use the appropriate vector field
-            if Lfh1 >= 0
-                du .= f2  # Moving towards post-collision
-            else
-                du .= f1  # Moving towards pre-collision
-            end
-        end
-    elseif h < 0
-        # Pre-collision dynamics
-        du .= pre_collision_dynamics(u)
-    else
-        # Post-collision dynamics
-        du .= post_collision_dynamics(u)
-    end
-end
+# ------------------------- Solve -------------------------
+tspan=(0.0,0.5)
+prob=ODEProblem(CoupledDynamics_Filippov!,u0,tspan,(params,Fext_input))
+sol=solve(prob,Rosenbrock23();abstol=1e-10,reltol=1e-8,dtmin=1e-15,dtmax=1e-4,force_dtmin=true,saveat=0.0001)
+println("Solved with ",length(sol.t)," steps.")
 
-#===============================
-    Hybrid Automaton Implementation
-===============================
-# This approach explicitly models different modes and transitions
-=#
+# ------------------------- Plotting -------------------------
+plot(sol.t,getindex.(sol.u,1),xlabel="Time (s)",ylabel="x1 (m)",title="Shuttle Displacement")
+plot(sol.t,getindex.(sol.u,2),xlabel="Time (s)",ylabel="v1 (m/s)",title="Shuttle Velocity")
+plot(sol.t,getindex.(sol.u,3),xlabel="Time (s)",ylabel="x2 (m)",title="Electrode Displacement")
+plot(sol.t,getindex.(sol.u,4),xlabel="Time (s)",ylabel="v2 (m/s)",title="Electrode Velocity")
+plot(sol.t,getindex.(sol.u,5),xlabel="Time (s)",ylabel="q (C)",title="Charge")
+plot(sol.t,getindex.(sol.u,6),xlabel="Time (s)",ylabel="V (V)",title="Output Voltage")
 
-# Pre-collision dynamics
-function pre_collision!(du, u, p, t)
-    # Unpack state variables: [x₁, ẋ₁, x₂, ẋ₂, q]
-    z₁, z₂, z₃, z₄, z₅ = u
-    
-    # Calculate forces for pre-collision mode
-    Fs = calculate_suspension_force(z₁, k₁, kₛₛ, gₛₛ)
-    Fc = -kₑ * (z₁ - z₃)
-    Cᵥₐᵣ = calculate_capacitance_pre_collision(z₃, a, ε, εₚ, gₚ, Leff, Tf, Tp, Cp)
-    Fe = calculate_electrostatic_force(z₃, z₅, Cᵥₐᵣ, Cp)
-    Fd = calculate_damping_force_pre_collision(z₃, z₄)
-    Ctotal = Cᵥₐᵣ + Cp
-    
-    # State derivatives
-    du[1] = z₂
-    du[2] = (1/m₁) * (Fs + N*Fc - m₁*Fapplied)
-    du[3] = z₄
-    du[4] = (1/m₂) * (Fc + Fd + Fe - m₂*Fapplied)
-    du[5] = (1/R) * (VDC - z₅/Ctotal)
-end
-
-# Post-collision dynamics
-function post_collision!(du, u, p, t)
-    # Unpack state variables: [x₁, ẋ₁, x₂, ẋ₂, q]
-    z₁, z₂, z₃, z₄, z₅ = u
-    
-    # Calculate forces for post-collision mode
-    Fs = calculate_suspension_force(z₁, k₁, kₛₛ, gₛₛ)
-    Fc = -kₑ * (z₁ - z₃) + kₑ * (abs(z₃) - gₚ) * sign(z₃)
-    Cᵥₐᵣ = calculate_capacitance_post_collision(z₃, a, ε, εₚ, gₚ, Leff, Tf, Tp, Cp)
-    Fe = calculate_electrostatic_force(z₃, z₅, Cᵥₐᵣ, Cp)
-    Fd = calculate_damping_force_post_collision(z₃, z₄)
-    Ctotal = Cᵥₐᵣ + Cp
-    
-    # State derivatives with modified mass
-    du[1] = z₂
-    du[2] = (1/m₁) * (Fs + N*Fc - m₁*Fapplied)
-    du[3] = z₄
-    du[4] = (1/(2*m₂)) * (Fc + Fd + Fe - m₂*Fapplied)  # Modified mass
-    du[5] = (1/R) * (VDC - z₅/Ctotal)
-end
-
-# Event detection for transition to post-collision
-function to_post_collision(u, t, integrator)
-    z₃ = u[3]  # x₂
-    return abs(z₃) - gₚ  # Becomes positive when |x₂| >= gₚ
-end
-
-# Event detection for transition to pre-collision
-function to_pre_collision(u, t, integrator)
-    z₃ = u[3]  # x₂
-    return gₚ - abs(z₃)  # Becomes positive when |x₂| < gₚ
-end
-
-# Event handlers
-function enter_post_collision!(integrator)
-    integrator.f = post_collision!
-    
-    # For visualization, store the transition time (not shown in this simple example)
-    # push!(transition_times, integrator.t)
-end
-
-function enter_pre_collision!(integrator)
-    integrator.f = pre_collision!
-    
-    # For visualization, store the transition time (not shown in this simple example)
-    # push!(transition_times, integrator.t)
-end
-
-#===============================
-    Simulation and Visualization
-===============================
-# This section simulates both models and creates plots to visualize the states
-=#
-
-# Initial conditions
-x₁₀ = 0.0       # Initial shuttle position
-ẋ₁₀ = 0.0       # Initial shuttle velocity
-x₂₀ = 0.2e-6    # Initial mobile electrode position (within pre-collision region)
-ẋ₂₀ = 0.0       # Initial mobile electrode velocity
-q₀ = 1.0e-12    # Initial charge
-
-u₀ = [x₁₀, ẋ₁₀, x₂₀, ẋ₂₀, q₀]
-tspan = (0.0, 2.0e-3)  # 2 ms simulation
-
-# Solve using Filippov approach
-prob_filippov = ODEProblem(filippov_system!, u₀, tspan)
-sol_filippov = solve(prob_filippov, Tsit5(), reltol=1e-8, abstol=1e-10)
-
-# Solve using Hybrid Automaton approach
-# Create callbacks for mode transitions
-cb_to_post = ContinuousCallback(to_post_collision, enter_post_collision!)
-cb_to_pre = ContinuousCallback(to_pre_collision, enter_pre_collision!)
-cb_set = CallbackSet(cb_to_post, cb_to_pre)
-
-# Determine initial mode based on initial conditions
-initial_mode = abs(u₀[3]) < gₚ ? pre_collision! : post_collision!
-
-prob_hybrid = ODEProblem(initial_mode, u₀, tspan)
-sol_hybrid = solve(prob_hybrid, Tsit5(), callback=cb_set, reltol=1e-8, abstol=1e-10)
-
-# Create a function to identify when the system is in post-collision mode
-function is_post_collision(x₂)
-    return abs(x₂) >= gₚ
-end
-
-# Create plots
-# 1. Plot states over time for Filippov approach
-filippov_plt = plot(layout=(3,2), size=(900, 600), title="Filippov Approach")
-
-# Add vertical lines where mode transitions occur (Filippov)
-mode_transitions_filippov = [sol_filippov.t[i] for i in 2:length(sol_filippov.t) 
-                            if is_post_collision(sol_filippov[3, i-1]) != is_post_collision(sol_filippov[3, i])]
-
-# Shuttle position (x₁)
-plot!(filippov_plt[1], sol_filippov.t, sol_filippov[1, :] .* 1e6, 
-      xlabel="Time (s)", ylabel="x₁ (μm)", label="Shuttle Position",
-      subplot=1)
-vline!(filippov_plt[1], mode_transitions_filippov, linestyle=:dash, color=:red, alpha=0.3, label="Mode Transition")
-
-# Shuttle velocity (ẋ₁)
-plot!(filippov_plt[2], sol_filippov.t, sol_filippov[2, :] .* 1e3, 
-      xlabel="Time (s)", ylabel="ẋ₁ (mm/s)", label="Shuttle Velocity",
-      subplot=2)
-vline!(filippov_plt[2], mode_transitions_filippov, linestyle=:dash, color=:red, alpha=0.3, label=false)
-
-# Mobile electrode position (x₂)
-plot!(filippov_plt[3], sol_filippov.t, sol_filippov[3, :] .* 1e6, 
-      xlabel="Time (s)", ylabel="x₂ (μm)", label="Mobile Electrode Position",
-      subplot=3)
-hline!(filippov_plt[3], [gₚ, -gₚ] .* 1e6, linestyle=:dash, color=:orange, label="Collision Threshold")
-vline!(filippov_plt[3], mode_transitions_filippov, linestyle=:dash, color=:red, alpha=0.3, label=false)
-
-# Mobile electrode velocity (ẋ₂)
-plot!(filippov_plt[4], sol_filippov.t, sol_filippov[4, :] .* 1e3, 
-      xlabel="Time (s)", ylabel="ẋ₂ (mm/s)", label="Mobile Electrode Velocity",
-      subplot=4)
-vline!(filippov_plt[4], mode_transitions_filippov, linestyle=:dash, color=:red, alpha=0.3, label=false)
-
-# Charge (q)
-plot!(filippov_plt[5], sol_filippov.t, sol_filippov[5, :] .* 1e12, 
-      xlabel="Time (s)", ylabel="q (pC)", label="Charge",
-      subplot=5)
-vline!(filippov_plt[5], mode_transitions_filippov, linestyle=:dash, color=:red, alpha=0.3, label=false)
-
-# Mode indicator
-mode_indicator = map(x -> is_post_collision(x) ? 1.0 : 0.0, sol_filippov[3, :])
-plot!(filippov_plt[6], sol_filippov.t, mode_indicator, 
-      xlabel="Time (s)", ylabel="Mode", label="System Mode",
-      ylim=(-0.1, 1.1), yticks=[0, 1], yformatter=y->["Pre-collision", "Post-collision"][Int(y)+1],
-      subplot=6)
-
-# 2. Plot states over time for Hybrid Automaton approach
-hybrid_plt = plot(layout=(3,2), size=(900, 600), title="Hybrid Automaton Approach")
-
-# Add vertical lines where mode transitions occur (Hybrid)
-mode_transitions_hybrid = [sol_hybrid.t[i] for i in 2:length(sol_hybrid.t) 
-                           if is_post_collision(sol_hybrid[3, i-1]) != is_post_collision(sol_hybrid[3, i])]
-
-# Shuttle position (x₁)
-plot!(hybrid_plt[1], sol_hybrid.t, sol_hybrid[1, :] .* 1e6, 
-      xlabel="Time (s)", ylabel="x₁ (μm)", label="Shuttle Position",
-      subplot=1)
-vline!(hybrid_plt[1], mode_transitions_hybrid, linestyle=:dash, color=:red, alpha=0.3, label="Mode Transition")
-
-# Shuttle velocity (ẋ₁)
-plot!(hybrid_plt[2], sol_hybrid.t, sol_hybrid[2, :] .* 1e3, 
-      xlabel="Time (s)", ylabel="ẋ₁ (mm/s)", label="Shuttle Velocity",
-      subplot=2)
-vline!(hybrid_plt[2], mode_transitions_hybrid, linestyle=:dash, color=:red, alpha=0.3, label=false)
-
-# Mobile electrode position (x₂)
-plot!(hybrid_plt[3], sol_hybrid.t, sol_hybrid[3, :] .* 1e6, 
-      xlabel="Time (s)", ylabel="x₂ (μm)", label="Mobile Electrode Position",
-      subplot=3)
-hline!(hybrid_plt[3], [gₚ, -gₚ] .* 1e6, linestyle=:dash, color=:orange, label="Collision Threshold")
-vline!(hybrid_plt[3], mode_transitions_hybrid, linestyle=:dash, color=:red, alpha=0.3, label=false)
-
-# Mobile electrode velocity (ẋ₂)
-plot!(hybrid_plt[4], sol_hybrid.t, sol_hybrid[4, :] .* 1e3, 
-      xlabel="Time (s)", ylabel="ẋ₂ (mm/s)", label="Mobile Electrode Velocity",
-      subplot=4)
-vline!(hybrid_plt[4], mode_transitions_hybrid, linestyle=:dash, color=:red, alpha=0.3, label=false)
-
-# Charge (q)
-plot!(hybrid_plt[5], sol_hybrid.t, sol_hybrid[5, :] .* 1e12, 
-      xlabel="Time (s)", ylabel="q (pC)", label="Charge",
-      subplot=5)
-vline!(hybrid_plt[5], mode_transitions_hybrid, linestyle=:dash, color=:red, alpha=0.3, label=false)
-
-# Mode indicator
-mode_indicator = map(x -> is_post_collision(x) ? 1.0 : 0.0, sol_hybrid[3, :])
-plot!(hybrid_plt[6], sol_hybrid.t, mode_indicator, 
-      xlabel="Time (s)", ylabel="Mode", label="System Mode",
-      ylim=(-0.1, 1.1), yticks=[0, 1], yformatter=y->["Pre-collision", "Post-collision"][Int(y)+1],
-      subplot=6)
-
-# 3. Compare x₂ between the approaches
-compare_plt = plot(size=(800, 400), title="Mobile Electrode Position Comparison")
-plot!(compare_plt, sol_filippov.t, sol_filippov[3, :] .* 1e6, 
-      label="Filippov Approach", xlabel="Time (s)", ylabel="x₂ (μm)")
-plot!(compare_plt, sol_hybrid.t, sol_hybrid[3, :] .* 1e6, 
-      label="Hybrid Automaton Approach", linestyle=:dash)
-hline!(compare_plt, [gₚ, -gₚ] .* 1e6, linestyle=:dash, color=:orange, label="Collision Threshold")
-
-# 4. Phase plane plot (x₂ vs ẋ₂)
-phase_plt = plot(size=(600, 500), title="Phase Plane (x₂ vs ẋ₂)")
-plot!(phase_plt, sol_filippov[3, :] .* 1e6, sol_filippov[4, :] .* 1e3, 
-      label="Filippov Approach", xlabel="x₂ (μm)", ylabel="ẋ₂ (mm/s)")
-plot!(phase_plt, sol_hybrid[3, :] .* 1e6, sol_hybrid[4, :] .* 1e3, 
-      label="Hybrid Automaton Approach", linestyle=:dash)
-vline!(phase_plt, [gₚ, -gₚ] .* 1e6, linestyle=:dash, color=:orange, label="Collision Threshold")
-
-# Display all plots
-display(filippov_plt)
-display(hybrid_plt)
-display(compare_plt)
-display(phase_plt)
-
-# Export plots (if needed)
-savefig(filippov_plt, "filippov_approach

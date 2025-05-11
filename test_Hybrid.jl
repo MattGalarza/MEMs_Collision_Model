@@ -118,7 +118,9 @@ function collision(x1, x2, params)
     if abs(x2) < params.gp # Independent electrode restoring force
         Fc = -params.ke * (x2 - x1)
     else # Electrode restoring force during contact
-        Fc = params.ke * (abs(x1) - params.gp) * sign(x2)
+        collision_side = sign(x2)
+        bp = collision_side * params.gp  # Position of the boundary
+        Fc = params.ke * (bp - x1)
     end
     return Fc
 end
@@ -228,7 +230,7 @@ end
 # ------------------------- External Force -------------------------
 # External force parameters
 f = 20.0  # Frequency (Hz)
-alpha = 1.5  # Applied acceleration constant
+alpha = 2.0  # Applied acceleration constant
 g = 9.81  # Gravitational constant 
 A = alpha * g  # Sinusoidal amplitude
 t_ramp = 0.2  # Ramp-up duration (s)
@@ -434,7 +436,7 @@ x1dot = [u[2] for u in sol.u]
 x2 = [u[3] for u in sol.u]
 x2dot = [u[4] for u in sol.u]
 q = [u[5] for u in sol.u]
-V = [u[6] for u in sol.u]
+Vout = [u[6] for u in sol.u]
 
 # Flag points where collision events occurred
 ss_flags = [abs(x1_val) >= params.gss for x1_val in x1]
@@ -451,8 +453,56 @@ p4 = plot(sol.t, x2dot, xlabel = "Time (s)", ylabel = "x2dot (m/s)", title = "Mo
 display(p4)
 p5 = plot(sol.t, q, xlabel = "Time (s)", ylabel = "q (C)", title = "Charge (q)")
 display(p5)
-p6 = plot(sol.t, V, xlabel = "Time (s)", ylabel = "V (V)", title = "Output Voltage (V)")
+p6 = plot(sol.t, Vout, xlabel = "Time (s)", ylabel = "V (V)", title = "Output Voltage (V)")
 display(p6)
+
+# Initialize arrays to store forces
+Fs_array = Float64[] # Suspension spring force
+Fc_array = Float64[] # Collision force
+Fd_array = Float64[] # Damping force
+Fe_array = Float64[] # Electrostatic force
+Fext_array = Float64[] # External force
+
+# Iterate over each solution point to compute forces
+for (i, t) in enumerate(sol.t)
+    # Extract state variables at time t
+    u_state = sol.u[i]
+    u1, u2, u3, u4, u5, u6 = u_state
+    
+    # Compute forces using the model functions
+    # Fs - Spring force
+    Fs = spring(u1, params)
+    push!(Fs_array, Fs)
+    
+    # Fc - Collision force
+    Fc = collision(u1, u3, params)
+    push!(Fc_array, Fc)
+    
+    # Fd - Damping force
+    Fd = damping(u3, u4, params)
+    push!(Fd_array, Fd)
+    
+    # Fe - Electrostatic force
+    Cvar = capacitance(u3, params)
+    Ctot, Fe = electrostatic(u3, u5, Cvar, params)
+    push!(Fe_array, Fe)
+    
+    # Fext - External force
+    Fext = Fext_input(t)
+    push!(Fext_array, Fext)
+end
+
+# Plotting respective forces
+p7 = plot(sol.t, Fs_array, xlabel = "Time (s)", ylabel = "Fs (N)", title = "Suspension + Soft-stopper Spring Force")
+display(p7)
+p8 = plot(sol.t, Fc_array, xlabel = "Time (s)", ylabel = "Fc (N)", title = "Mobile Electrode Collision Force")
+display(p8)
+p9 = plot(sol.t, Fd_array, xlabel = "Time (s)", ylabel = "Fd (N)", title = "Viscous Damping Force")
+display(p9)
+p10 = plot(sol.t, Fe_array, xlabel = "Time (s)", ylabel = "Fe (N)", title = "Electrostatic Force")
+display(p10)
+p11 = plot(sol.t, Fext_array, xlabel = "Time (s)", ylabel = "Fext (N)", title = "Applied External Force")
+display(p11)
 
 
 

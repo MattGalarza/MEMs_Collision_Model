@@ -334,3 +334,33 @@ p12 = plot(sol.t, Fe_array, xlabel = "Time (s)", ylabel = "Fe (N)", title = "Ele
 display(p12)
 p13 = plot(sol.t, Fext_input, xlabel = "Time (s)", ylabel = "Fext (N)", title = "Applied External Force")
 display(p13)
+
+
+# Separate spring components
+Fsp_array = [-params.k1 * u1 for u1 in x1]  # Linear spring only
+
+# Soft-stopper component
+Fss_array = Float64[]
+for u1 in x1
+    if abs(u1) < params.gss
+        push!(Fss_array, 0.0)
+    else
+        push!(Fss_array, -params.kss * (abs(u1) - params.gss) * sign(u1))
+    end
+end
+
+# Plot components separately
+p_forces = plot(sol.t, [Fsp_array Fss_array Fs_array], 
+              label=["Linear Spring" "Soft-stopper" "Total Spring"],
+              xlabel="Time (s)", ylabel="Force (N)", 
+              title="Spring Force Components")
+display(p_forces)
+
+# Plot when soft-stopper engages
+ss_engaged = [abs(u1) >= params.gss for u1 in x1]
+p_engage = plot(sol.t, ss_engaged, 
+               seriestype=:step, 
+               ylabel="Soft-stopper Engaged", 
+               xlabel="Time (s)",
+               title="Soft-stopper Engagement")
+display(p_engage)

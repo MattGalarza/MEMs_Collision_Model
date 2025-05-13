@@ -821,15 +821,15 @@ savefig(p_cs, "collision_state.png")
 println("All individual journal-quality plots created successfully!")
 
 
-
-# Journal-Quality Individual Plots for State Variables and Forces (2 Oscillations)
+# ----------------------------------------- Short Fancy Plots -----------------------------------------
+# Journal-Quality Individual Plots for State Variables and Forces (Optimized Oscillations)
 using Plots, LaTeXStrings, Measures, Statistics
 
 # Define high-quality theme for journal publication
 function set_journal_theme()
     default(
         fontfamily="Computer Modern",  # LaTeX-like font
-        linewidth=2.5,                 # Thicker lines
+        linewidth=1.25,                 # Thicker lines
         foreground_color_legend=nothing, # Transparent legend background
         background_color_legend=nothing, # Transparent legend background
         legendfontsize=10,             # Legend font size
@@ -849,68 +849,22 @@ end
 # Apply the theme
 set_journal_theme()
 
-# Function to detect oscillation period and select window for 2 oscillations
-function select_two_oscillations(time, signal; start_time=0.2)
-    # Find the start index (after initial transients)
-    start_idx = findfirst(t -> t >= start_time, time)
-    if start_idx === nothing
-        start_idx = 1
-    end
-    
-    # Extract data starting from start_idx
-    trimmed_time = time[start_idx:end]
-    trimmed_signal = signal[start_idx:end]
-    
-    # Find peaks to determine period
-    peaks = Int[]
-    for i in 2:(length(trimmed_signal)-1)
-        if trimmed_signal[i] > trimmed_signal[i-1] && trimmed_signal[i] > trimmed_signal[i+1]
-            push!(peaks, i)
-            if length(peaks) >= 3  # We need at least 3 peaks to get 2 complete oscillations
-                break
-            end
-        end
-    end
-    
-    # If not enough peaks found, use a default number of points
-    if length(peaks) < 3
-        # Try to find valleys instead if signal is predominantly negative
-        valleys = Int[]
-        for i in 2:(length(trimmed_signal)-1)
-            if trimmed_signal[i] < trimmed_signal[i-1] && trimmed_signal[i] < trimmed_signal[i+1]
-                push!(valleys, i)
-                if length(valleys) >= 3
-                    break
-                end
-            end
-        end
-        
-        # If still not enough features found, just use a default window
-        if length(valleys) < 3
-            end_idx = min(start_idx + 1000, length(time))
-            return start_idx, end_idx
-        else
-            # Use valleys to determine period
-            t1 = trimmed_time[valleys[1]]
-            t3 = trimmed_time[valleys[3]]
-            period = (t3 - t1) / 2
-            end_time = trimmed_time[1] + 2 * period
-            end_idx = findfirst(t -> t >= end_time, time)
-            return start_idx, end_idx
-        end
-    else
-        # Use peaks to determine period
-        t1 = trimmed_time[peaks[1]]
-        t3 = trimmed_time[peaks[3]]
-        period = (t3 - t1) / 2
-        end_time = trimmed_time[1] + 2 * period
-        end_idx = findfirst(t -> t >= end_time, time)
-        return start_idx, end_idx
-    end
+# Fixed time window for exactly 4 oscillations based on the image you shared
+start_time = 0.2775    # Same start time as in the image
+end_time = 0.33     # End time calibrated from the image you provided
+
+# Find indices corresponding to the desired time range
+start_idx = findfirst(t -> t >= start_time, sol.t)
+end_idx = findfirst(t -> t >= end_time, sol.t)
+
+if start_idx === nothing
+    start_idx = 1
+end
+if end_idx === nothing
+    end_idx = length(sol.t)
 end
 
-# Determine the time window for 2 oscillations using the shuttle displacement (x1)
-start_idx, end_idx = select_two_oscillations(sol.t, x1)
+# Extract data for the specified time window
 plot_time = sol.t[start_idx:end_idx]
 plot_x1 = x1[start_idx:end_idx]
 plot_x1dot = x1dot[start_idx:end_idx]
@@ -931,15 +885,11 @@ plot_collision_numeric = [s == "translational" ? 0 : 1 for s in plot_collision_s
 println("Selected time range: $(plot_time[1]) to $(plot_time[end]) seconds")
 println("Number of data points: $(length(plot_time))")
 
-##############################################################################
-# STATE VARIABLE PLOTS (2 OSCILLATIONS)
-##############################################################################
-
 # 1. Shuttle Displacement (x1)
 p_x1 = plot(
     plot_time, 
     plot_x1 .* 1e6,  # Convert to μm for better visualization
-    linewidth=2.5,
+    linewidth=1.25,
     color=:royalblue3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Shuttle Displacement $x_1$ ($\mu$m)",
@@ -953,14 +903,14 @@ p_x1 = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_x1, "shuttle_displacement_2osc.pdf")
-savefig(p_x1, "shuttle_displacement_2osc.png")
+savefig(p_x1, "shuttle_displacement_opt.pdf")
+savefig(p_x1, "shuttle_displacement_opt.png")
 
 # 2. Shuttle Velocity (x1dot)
 p_x1dot = plot(
     plot_time, 
     plot_x1dot .* 1e3,  # Convert to mm/s
-    linewidth=2.5,
+    linewidth=1.25,
     color=:firebrick3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Shuttle Velocity $\dot{x}_1$ (mm/s)",
@@ -974,14 +924,14 @@ p_x1dot = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_x1dot, "shuttle_velocity_2osc.pdf")
-savefig(p_x1dot, "shuttle_velocity_2osc.png")
+savefig(p_x1dot, "shuttle_velocity_opt.pdf")
+savefig(p_x1dot, "shuttle_velocity_opt.png")
 
 # 3. Electrode Displacement (x2)
 p_x2 = plot(
     plot_time, 
     plot_x2 .* 1e6,  # Convert to μm
-    linewidth=2.5,
+    linewidth=1.25,
     color=:green4,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Electrode Displacement $x_2$ ($\mu$m)",
@@ -995,14 +945,14 @@ p_x2 = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_x2, "electrode_displacement_2osc.pdf")
-savefig(p_x2, "electrode_displacement_2osc.png")
+savefig(p_x2, "electrode_displacement_opt.pdf")
+savefig(p_x2, "electrode_displacement_opt.png")
 
 # 4. Electrode Velocity (x2dot)
 p_x2dot = plot(
     plot_time, 
     plot_x2dot .* 1e3,  # Convert to mm/s
-    linewidth=2.5,
+    linewidth=1.25,
     color=:purple3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Electrode Velocity $\dot{x}_2$ (mm/s)",
@@ -1016,14 +966,14 @@ p_x2dot = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_x2dot, "electrode_velocity_2osc.pdf")
-savefig(p_x2dot, "electrode_velocity_2osc.png")
+savefig(p_x2dot, "electrode_velocity_opt.pdf")
+savefig(p_x2dot, "electrode_velocity_opt.png")
 
 # 5. Charge (Qvar)
 p_qvar = plot(
     plot_time, 
     plot_Qvar .* 1e12,  # Convert to pC
-    linewidth=2.5,
+    linewidth=1.25,
     color=:darkorange,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Charge $Q_{var}$ (pC)",
@@ -1037,14 +987,14 @@ p_qvar = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_qvar, "charge_2osc.pdf")
-savefig(p_qvar, "charge_2osc.png")
+savefig(p_qvar, "charge_opt.pdf")
+savefig(p_qvar, "charge_opt.png")
 
 # 6. Output Voltage (V)
 p_vout = plot(
     plot_time, 
     plot_V .* 1e3,  # Convert to mV
-    linewidth=2.5,
+    linewidth=1.25,
     color=:darkorange2,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Output Voltage $V_{out}$ (mV)",
@@ -1058,14 +1008,14 @@ p_vout = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_vout, "output_voltage_2osc.pdf")
-savefig(p_vout, "output_voltage_2osc.png")
+savefig(p_vout, "output_voltage_opt.pdf")
+savefig(p_vout, "output_voltage_opt.png")
 
 # 7. Relative Displacement (x1-x2)
 p_rel = plot(
     plot_time, 
     plot_rel_disp .* 1e6,  # Convert to μm
-    linewidth=2.5,
+    linewidth=1.25,
     color=:teal,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Relative Displacement $x_1 - x_2$ ($\mu$m)",
@@ -1079,18 +1029,14 @@ p_rel = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_rel, "relative_displacement_2osc.pdf")
-savefig(p_rel, "relative_displacement_2osc.png")
-
-##############################################################################
-# FORCE PLOTS (2 OSCILLATIONS)
-##############################################################################
+savefig(p_rel, "relative_displacement_opt.pdf")
+savefig(p_rel, "relative_displacement_opt.png")
 
 # 1. Suspension Spring Force (Fs)
 p_fs = plot(
     plot_time, 
     plot_Fs .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.25,
     color=:royalblue3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Spring Force $F_s$ ($\mu$N)",
@@ -1104,14 +1050,14 @@ p_fs = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_fs, "spring_force_2osc.pdf")
-savefig(p_fs, "spring_force_2osc.png")
+savefig(p_fs, "spring_force_opt.pdf")
+savefig(p_fs, "spring_force_opt.png")
 
 # 2. Collision Force (Fc)
 p_fc = plot(
     plot_time, 
     plot_Fc .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.25,
     color=:firebrick3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Collision Force $F_c$ ($\mu$N)",
@@ -1125,14 +1071,14 @@ p_fc = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_fc, "collision_force_2osc.pdf")
-savefig(p_fc, "collision_force_2osc.png")
+savefig(p_fc, "collision_force_opt.pdf")
+savefig(p_fc, "collision_force_opt.png")
 
 # 3. Damping Force (Fd)
 p_fd = plot(
     plot_time, 
     plot_Fd .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.25,
     color=:green4,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Damping Force $F_d$ ($\mu$N)",
@@ -1146,14 +1092,14 @@ p_fd = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_fd, "damping_force_2osc.pdf")
-savefig(p_fd, "damping_force_2osc.png")
+savefig(p_fd, "damping_force_opt.pdf")
+savefig(p_fd, "damping_force_opt.png")
 
 # 4. Electrostatic Force (Fe)
 p_fe = plot(
     plot_time, 
     plot_Fe .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.25,
     color=:purple3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Electrostatic Force $F_e$ ($\mu$N)",
@@ -1167,14 +1113,14 @@ p_fe = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_fe, "electrostatic_force_2osc.pdf")
-savefig(p_fe, "electrostatic_force_2osc.png")
+savefig(p_fe, "electrostatic_force_opt.pdf")
+savefig(p_fe, "electrostatic_force_opt.png")
 
 # 5. External Force (Fext)
 p_fext = plot(
     plot_time, 
     plot_Fext .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.25,
     color=:darkorange2,
     xlabel=L"Time $t$ (s)",
     ylabel=L"External Force $F_{ext}$ ($\mu$N)",
@@ -1188,14 +1134,14 @@ p_fext = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_fext, "external_force_2osc.pdf")
-savefig(p_fext, "external_force_2osc.png")
+savefig(p_fext, "external_force_opt.pdf")
+savefig(p_fext, "external_force_opt.png")
 
 # 6. Collision State
 p_cs = plot(
     plot_time, 
     plot_collision_numeric,
-    linewidth=2.5,
+    linewidth=1.25,
     color=:black,
     xlabel=L"Time $t$ (s)",
     ylabel="Collision State",
@@ -1210,8 +1156,8 @@ p_cs = plot(
     top_margin=5mm,
     right_margin=5mm
 )
-savefig(p_cs, "collision_state_2osc.pdf")
-savefig(p_cs, "collision_state_2osc.png")
+savefig(p_cs, "collision_state_opt.pdf")
+savefig(p_cs, "collision_state_opt.png")
 
 # Create a combined state variables plot (2x3)
 p_states = plot(
@@ -1222,7 +1168,7 @@ p_states = plot(
     bottom_margin=10mm,
     top_margin=5mm,
     right_margin=5mm,
-    plot_title="MEMS Energy Harvester: State Variables (2 Oscillations)",
+    plot_title="MEMS Energy Harvester: State Variables",
     plot_titlelocation=:center,
     plot_titlefontsize=14
 )
@@ -1246,8 +1192,8 @@ plot!(p_states[5], plot_time, plot_V .* 1e3, linewidth=2, color=:darkorange2,
 plot!(p_states[6], plot_time, plot_rel_disp .* 1e6, linewidth=2, color=:teal, 
       xlabel=L"Time $t$ (s)", ylabel=L"$x_1 - x_2$ ($\mu$m)", title="Relative Displacement", legend=false)
 
-savefig(p_states, "combined_states_2osc.pdf")
-savefig(p_states, "combined_states_2osc.png")
+savefig(p_states, "combined_states_opt.pdf")
+savefig(p_states, "combined_states_opt.png")
 
 # Create a combined forces plot (2x3)
 p_forces = plot(
@@ -1258,7 +1204,7 @@ p_forces = plot(
     bottom_margin=10mm,
     top_margin=5mm,
     right_margin=5mm,
-    plot_title="MEMS Energy Harvester: Forces (2 Oscillations)",
+    plot_title="MEMS Energy Harvester: Forces",
     plot_titlelocation=:center,
     plot_titlefontsize=14
 )
@@ -1283,690 +1229,41 @@ plot!(p_forces[6], plot_time, plot_collision_numeric, linewidth=2, color=:black,
       xlabel=L"Time $t$ (s)", ylabel="State", yticks=([0, 1], ["Trans.", "Rot."]), 
       title="Collision State", legend=false)
 
-savefig(p_forces, "combined_forces_2osc.pdf")
-savefig(p_forces, "combined_forces_2osc.png")
+savefig(p_forces, "combined_forces_opt.pdf")
+savefig(p_forces, "combined_forces_opt.png")
 
-println("All 2-oscillation plots created successfully!")
-
-# --------------------------------------- Frequency Sweep ---------------------------------------
-using Statistics, Plots, Printf, LaTeXStrings, StatsBase
-
-# Define the frequency range and increments
-freq_min = 5.0
-freq_max = 150.0
-num_points = 75  # Increase for finer resolution if needed
-freq_values = range(freq_min, freq_max, length=num_points)
-
-# Initialize arrays to store outputs
-ss_times = Float64[]
-max_vout_values = Float64[]
-max_z1_values = Float64[]
-max_z1dot_values = Float64[]
-max_z2_values = Float64[]
-max_z2dot_values = Float64[]
-rms_vout_values = Float64[]
-
-# For storing forces at resonance
-resonance_forces = Dict()
-resonance_states = Dict()
-resonance_time = nothing
-
-# Parameters for detection (similar to MATLAB code)
-peak_threshold = 5e-9      # Threshold for peak detection
-steady_state_threshold = 2.5e-9  # Threshold for steady state detection
-min_steady_state_time = 0.2      # Minimum time to start considering steady state
-num_peaks_to_analyze = 35        # Number of peaks to analyze in each iteration
-
-println("Starting frequency sweep from $(freq_min) Hz to $(freq_max) Hz...")
-println("-----------------------------------------------------")
-println("| Frequency (Hz) | RMS Voltage (V) | Max Disp. (µm) |")
-println("-----------------------------------------------------")
-
-# Run the model for each frequency value
-for (i, current_freq) in enumerate(freq_values)
-    # Set the frequency for this iteration
-    f = current_freq  # Update the frequency variable
-    
-    # Set the external force parameters
-    alpha = 1.0  # 1g acceleration
-    g = 9.81     # Gravitational constant 
-    A = alpha * g
-    t_ramp = 0.2  # Ramp-up time
-    
-    # Update the external force function (sine wave with frequency)
-    Fext_input = t -> A * (t < t_ramp ? t / t_ramp : 1.0) * sin(2 * π * current_freq * t)
-    
-    # Initialize parameters 
-    p_new = deepcopy(AnalyticalModel.p)
-    
-    # Set simulation time (matching MATLAB's simulation time)
-    tspan = (0.0, 75.0)  # Long simulation for steady state
-    
-    # Initial conditions
-    x10 = 0.0      # Initial displacement
-    x10dot = 0.0   # Initial velocity
-    x20 = 0.0      # Initial electrode displacement
-    x20dot = 0.0   # Initial electrode velocity
-    
-    # Compute initial electrostatic parameters
-    Ctotal0, Fe0 = AnalyticalModel.electrostatic(
-        x10, x20, 0.0, 
-        p_new.g0, p_new.gp, p_new.a, 
-        p_new.e, p_new.ep, p_new.cp, 
-        p_new.wt, p_new.wb, p_new.ke, 
-        p_new.E, p_new.I, p_new.Leff, 
-        p_new.Tf, p_new.Tp, p_new.N
-    )
-    
-    Q0 = p_new.Vbias * Ctotal0  # Initial charge
-    Vout0 = p_new.Vbias - (Q0 / Ctotal0)  # Initial voltage
-    z0 = [x10, x10dot, x20, x20dot, Q0, Vout0]
-    
-    # ODE solver settings
-    abstol = 1e-9  # Absolute tolerance
-    reltol = 1e-6  # Relative tolerance
-    
-    # Define the wrapper function for the ODE solver
-    function CoupledSystem_wrapper!(dz, z, p, t)
-        current_acceleration = Fext_input(t)
-        AnalyticalModel.CoupledSystem!(dz, z, p, t, current_acceleration)
-    end
-    
-    # Solve the ODE system (similar to MATLAB's ode45 solver)
-    eqn = ODEProblem(CoupledSystem_wrapper!, z0, tspan, p_new)
-    sol = solve(eqn, Rosenbrock23(); abstol=abstol, reltol=reltol, maxiters=1e7)
-    
-    # Extract the results
-    time = sol.t
-    z1 = [u[1] for u in sol.u]      # Shuttle displacement
-    z1dot = [u[2] for u in sol.u]   # Shuttle velocity
-    z2 = [u[3] for u in sol.u]      # Electrode displacement
-    z2dot = [u[4] for u in sol.u]   # Electrode velocity
-    qvar = [u[5] for u in sol.u]    # Charge
-    vout = [u[6] for u in sol.u]    # Output voltage
-    
-    # Find the index corresponding to the minimum time
-    min_time_index = findfirst(t -> t >= min_steady_state_time, time)
-    if min_time_index === nothing
-        min_time_index = 1
-    end
-    
-    # Trim the data to start from the specified minimum time
-    z1_trimmed = z1[min_time_index:end]
-    z1dot_trimmed = z1dot[min_time_index:end]
-    z2_trimmed = z2[min_time_index:end]
-    z2dot_trimmed = z2dot[min_time_index:end]
-    qvar_trimmed = qvar[min_time_index:end]
-    vout_trimmed = vout[min_time_index:end]
-    time_trimmed = time[min_time_index:end]
-    
-    # Find the indices of all peaks in the displacement data (similar to findpeaks)
-    peak_indices = Int[]
-    for i in 2:(length(z1_trimmed)-1)
-        if z1_trimmed[i] > z1_trimmed[i-1] && z1_trimmed[i] > z1_trimmed[i+1] && z1_trimmed[i] > peak_threshold
-            push!(peak_indices, i)
-        end
-    end
-    
-    # Initialize steady state detected flag
-    steady_state_detected = false
-    ss_index = length(time_trimmed)  # Default to end of simulation
-    
-    # Continue analyzing peaks until steady state is detected or no more peaks
-    if !isempty(peak_indices)
-        # Analyze peaks in chunks of num_peaks_to_analyze
-        for start_idx in 1:num_peaks_to_analyze:length(peak_indices)
-            end_idx = min(start_idx + num_peaks_to_analyze - 1, length(peak_indices))
-            
-            if end_idx <= length(peak_indices)
-                current_peaks = z1_trimmed[peak_indices[start_idx:end_idx]]
-                
-                if length(current_peaks) >= 2
-                    # Separate odd and even peaks (like MATLAB code)
-                    odd_idxs = collect(1:2:length(current_peaks))
-                    even_idxs = collect(2:2:length(current_peaks))
-                    
-                    odd_values = length(odd_idxs) > 0 ? current_peaks[odd_idxs] : Float64[]
-                    even_values = length(even_idxs) > 0 ? current_peaks[even_idxs] : Float64[]
-                    
-                    # Check if peak variation is within threshold
-                    if !isempty(odd_values) && !isempty(even_values)
-                        diff_odd = maximum(odd_values) - minimum(odd_values)
-                        diff_even = maximum(even_values) - minimum(even_values)
-                        
-                        if diff_odd < steady_state_threshold || diff_even < steady_state_threshold
-                            steady_state_detected = true
-                            ss_index = peak_indices[start_idx]
-                            push!(ss_times, time_trimmed[ss_index])
-                            break  # Exit the loop if steady state is detected
-                        end
-                    end
-                end
-            end
-        end
-    end
-    
-    # Record values based on steady state detection
-    if steady_state_detected
-        # Calculate RMS voltage from steady state onward
-        vout_ss = vout_trimmed[ss_index:end]
-        rms_vout = sqrt(mean(vout_ss.^2))
-        
-        # Record maximum values
-        push!(max_vout_values, maximum(abs.(vout_ss)))
-        push!(max_z1_values, maximum(abs.(z1_trimmed[ss_index:end])))
-        push!(max_z1dot_values, maximum(abs.(z1dot_trimmed[ss_index:end])))
-        push!(max_z2_values, maximum(abs.(z2_trimmed[ss_index:end])))
-        push!(max_z2dot_values, maximum(abs.(z2dot_trimmed[ss_index:end])))
-        push!(rms_vout_values, rms_vout)
-        
-        # Print progress
-        @printf("| %12.2f | %14.6f | %13.2f |\n", 
-                current_freq, rms_vout, maximum(abs.(z1_trimmed[ss_index:end])) * 1e6)
-                
-        # If this is close to resonance (highest RMS voltage so far), store the forces
-        if length(rms_vout_values) == 1 || rms_vout > maximum(rms_vout_values[1:end-1])
-            # Store the full solution at resonance for later force plots
-            resonance_forces = Dict(
-                "time" => time,
-                "z1" => z1,
-                "z1dot" => z1dot,
-                "z2" => z2,
-                "z2dot" => z2dot,
-                "vout" => vout,
-                "qvar" => qvar,
-                "frequency" => current_freq
-            )
-            resonance_time = time
-        end
-    else
-        # If steady state not detected, use the last section of simulation
-        last_quarter_idx = round(Int, length(time_trimmed) * 0.75)
-        
-        # Calculate values from the last quarter
-        vout_last = vout_trimmed[last_quarter_idx:end]
-        rms_vout = sqrt(mean(vout_last.^2))
-        
-        # Add values
-        push!(ss_times, NaN)
-        push!(max_vout_values, maximum(abs.(vout_last)))
-        push!(max_z1_values, maximum(abs.(z1_trimmed[last_quarter_idx:end])))
-        push!(max_z1dot_values, maximum(abs.(z1dot_trimmed[last_quarter_idx:end])))
-        push!(max_z2_values, maximum(abs.(z2_trimmed[last_quarter_idx:end])))
-        push!(max_z2dot_values, maximum(abs.(z2dot_trimmed[last_quarter_idx:end])))
-        push!(rms_vout_values, rms_vout)
-        
-        # Print progress with warning
-        @printf("| %12.2f | %14.6f | %13.2f | (SS not detected)\n", 
-                current_freq, rms_vout, maximum(abs.(z1_trimmed[last_quarter_idx:end])) * 1e6)
-    end
-end
-
-println("-----------------------------------------------------")
-println("Frequency sweep completed.")
-
-# Now extract the resonance data for force calculation
-if !isempty(resonance_forces)
-    # Calculate forces at resonance frequency
-    res_time = resonance_forces["time"]
-    res_z1 = resonance_forces["z1"]
-    res_z1dot = resonance_forces["z1dot"]
-    res_z2 = resonance_forces["z2"]
-    res_z2dot = resonance_forces["z2dot"]
-    res_qvar = resonance_forces["qvar"]
-    res_freq = resonance_forces["frequency"]
-    
-    # Initialize arrays for forces
-    Fs_array = Float64[]  # Suspension spring force
-    Fc_array = Float64[]  # Collision force
-    Fd_array = Float64[]  # Damping force
-    Fe_array = Float64[]  # Electrostatic force
-    Fext_array = Float64[] # External force
-    CollisionState_array = String[]  # Collision state
-    
-    # Calculate forces at each time point
-    p_new = deepcopy(AnalyticalModel.p)
-    
-    for i in 1:length(res_time)
-        # Extract state variables
-        z1 = res_z1[i]
-        z1dot = res_z1dot[i]
-        z2 = res_z2[i]
-        z2dot = res_z2dot[i]
-        qvar = res_qvar[i]
-        
-        # Calculate external force at this time
-        t = res_time[i]
-        alpha = 1.0
-        g = 9.81
-        A = alpha * g
-        t_ramp = 0.2
-        Fext = A * (t < t_ramp ? t / t_ramp : 1.0) * sin(2 * π * res_freq * t)
-        push!(Fext_array, Fext)
-        
-        # Calculate spring force
-        Fs = AnalyticalModel.spring(z1, p_new.k1, p_new.k3, p_new.gss, p_new.kss)
-        push!(Fs_array, Fs)
-        
-        # Calculate collision force
-        Fc, collision_state = AnalyticalModel.collision(z1, z2, p_new.m2, p_new.ke, p_new.gp)
-        push!(Fc_array, Fc)
-        push!(CollisionState_array, collision_state)
-        
-        # Calculate damping force
-        if collision_state == "translational"
-            Fd = AnalyticalModel.damping(z1, z1dot, z2, z2dot, p_new.a, p_new.c, p_new.gp, p_new.Leff, p_new.Tf, p_new.eta, p_new.lambda, p_new.sigmap)
-        else
-            Fd = AnalyticalModel.damping(z1, z1dot, z2, z1dot, p_new.a, p_new.c, p_new.gp, p_new.Leff, p_new.Tf, p_new.eta, p_new.lambda, p_new.sigmap)
-        end
-        push!(Fd_array, Fd)
-        
-        # Calculate electrostatic force
-        Ctotal, Fe = AnalyticalModel.electrostatic(
-            z1, z2, qvar, 
-            p_new.g0, p_new.gp, p_new.a, 
-            p_new.e, p_new.ep, p_new.cp, 
-            p_new.wt, p_new.wb, p_new.ke, 
-            p_new.E, p_new.I, p_new.Leff, 
-            p_new.Tf, p_new.Tp, p_new.N
-        )
-        push!(Fe_array, Fe)
-    end
-    
-    # Store the forces for plotting
-    resonance_forces["Fs"] = Fs_array
-    resonance_forces["Fc"] = Fc_array
-    resonance_forces["Fd"] = Fd_array
-    resonance_forces["Fe"] = Fe_array
-    resonance_forces["Fext"] = Fext_array
-    resonance_forces["CollisionState"] = CollisionState_array
-end
-
-# Define a high-quality theme for journal publications
-function set_journal_theme()
-    default(
-        fontfamily="Computer Modern",  # LaTeX-like font
-        linewidth=2.5,                 # Thicker lines
-        foreground_color_legend=nothing, # Transparent legend background
-        background_color_legend=nothing, # Transparent legend background
-        legendfontsize=10,             # Legend font size
-        guidefontsize=12,              # Axis label font size
-        tickfontsize=10,               # Tick label font size
-        titlefontsize=14,              # Title font size
-        size=(800, 600),               # Figure size
-        dpi=600,                       # High DPI for print quality
-        margin=8mm,                    # Margins around the plot
-        grid=false,                    # No grid by default
-        framestyle=:box,               # Box-style frame
-        palette=:default               # Color palette
-    )
-end
-
-# Apply the journal theme
-set_journal_theme()
-
-# 1. Frequency Response Plots
-# First, create the RMS voltage vs frequency plot
-p_voltage = plot(
-    freq_values, 
-    rms_vout_values .* 1000,       # Convert to mV
-    seriestype=:line,
-    linewidth=2,
-    color=:royalblue3,
-    xlabel=L"Frequency $f$ (Hz)",
-    ylabel=L"RMS Voltage $V_{rms}$ (mV)",
-    title="",                      # Journal figures often don't have titles
-    label="",                      # No label needed for single series
-    xticks=0:20:160,               # Custom x-ticks
-    yticks=0:2:20,                 # Custom y-ticks (adjust based on your data)
-    xlims=(freq_min, freq_max),
-    ylims=(0, nothing),            # Start y-axis at 0
-    minorgrid=false,
-    legend=false,                  # No legend for single series
-    framestyle=:box,
-    foreground_color_axis=:black,
-    tick_direction=:out,           # Ticks pointing outward
-    guidefontsize=12
-)
-
-# Add data points (markers) on top of the line
-scatter!(
-    p_voltage,
-    freq_values, 
-    rms_vout_values .* 1000,
-    markersize=5,
-    markerstrokewidth=0.5,
-    markerstrokecolor=:black,
-    markercolor=:royalblue3,
-    markershape=:circle,
-    label=""
-)
-
-# Create the displacement plot with the same styling
-p_displacement = plot(
-    freq_values, 
-    max_z1_values .* 1e6,          # Convert to μm
-    seriestype=:line,
-    linewidth=2,
-    color=:firebrick3,
-    xlabel=L"Frequency $f$ (Hz)",
-    ylabel=L"Maximum Displacement $x_{max}$ ($\mu$m)",
-    title="",
-    label="",
-    xticks=0:20:160,
-    yticks=0:5:30,                 # Adjust based on your data
-    xlims=(freq_min, freq_max),
-    ylims=(0, nothing),            # Start y-axis at 0
-    minorgrid=false,
-    legend=false,
-    framestyle=:box,
-    foreground_color_axis=:black,
-    tick_direction=:out,
-    guidefontsize=12
-)
-
-# Add data points to displacement plot
-scatter!(
-    p_displacement,
-    freq_values, 
-    max_z1_values .* 1e6,
-    markersize=5,
-    markerstrokewidth=0.5,
-    markerstrokecolor=:black,
-    markercolor=:firebrick3,
-    markershape=:circle,
-    label=""
-)
-
-# Create a multi-panel figure for frequency response
-p_freq_combined = plot(
-    p_voltage, 
-    p_displacement, 
-    layout=(2,1),
-    size=(800, 800),
+# Create a comprehensive figure for the paper with just 4 key plots
+p_paper = plot(
+    layout=(2,2),
+    size=(1200, 1000),
     dpi=600,
-    margin=10mm,
-    link=:x                        # Link x-axes
+    left_margin=12mm,
+    bottom_margin=12mm,
+    top_margin=8mm,
+    right_margin=8mm,
+    plot_title="MEMS Electrostatic Energy Harvester Dynamics",
+    plot_titlelocation=:center,
+    plot_titlefontsize=16
 )
 
-# Save frequency response plots
-savefig(p_voltage, "voltage_response.pdf")
-savefig(p_voltage, "voltage_response.png")
-savefig(p_displacement, "displacement_response.pdf")
-savefig(p_displacement, "displacement_response.png")
-savefig(p_freq_combined, "frequency_response_combined.pdf")
-savefig(p_freq_combined, "frequency_response_combined.png")
+# Add key plots: Displacements, Voltage, Collision Force, and Damping Force
+plot!(p_paper[1], plot_time, plot_x1 .* 1e6, linewidth=2.5, color=:royalblue3, 
+      xlabel="", ylabel=L"Displacement ($\mu$m)", title="Shuttle and Electrode Displacement", 
+      label=L"$x_1$ (Shuttle)")
+plot!(p_paper[1], plot_time, plot_x2 .* 1e6, linewidth=2.5, color=:green4, 
+      linestyle=:dash, label=L"$x_2$ (Electrode)")
+      
+plot!(p_paper[2], plot_time, plot_V .* 1e3, linewidth=2.5, color=:darkorange2, 
+      xlabel="", ylabel=L"Voltage $V_{out}$ (mV)", title="Output Voltage", legend=false)
+      
+plot!(p_paper[3], plot_time, plot_Fc .* 1e6, linewidth=2.5, color=:firebrick3, 
+      xlabel=L"Time $t$ (s)", ylabel=L"Force $F_c$ ($\mu$N)", title="Collision Force", legend=false)
+      
+plot!(p_paper[4], plot_time, plot_Fd .* 1e6, linewidth=2.5, color=:green4, 
+      xlabel=L"Time $t$ (s)", ylabel=L"Force $F_d$ ($\mu$N)", title="Damping Force", legend=false)
 
-# 2. State Variable Plots at Resonance
-if !isempty(resonance_forces)
-    # Time for state plots - use section around steady state
-    res_time = resonance_forces["time"]
-    start_time = 0.25  # Start after initial transients
-    end_time = 0.35    # Just show a small window for clarity
-    
-    time_indices = findall(t -> start_time <= t <= end_time, res_time)
-    
-    # Extract state variables in the time window
-    plot_time = res_time[time_indices]
-    plot_z1 = resonance_forces["z1"][time_indices]
-    plot_z1dot = resonance_forces["z1dot"][time_indices]
-    plot_z2 = resonance_forces["z2"][time_indices]
-    plot_z2dot = resonance_forces["z2dot"][time_indices]
-    plot_vout = resonance_forces["vout"][time_indices]
-    
-    # Get resonance frequency
-    res_freq = resonance_forces["frequency"]
-    
-    # Create a multi-panel state plot
-    p_states = plot(
-        layout=(3,2),
-        size=(900, 1000),
-        dpi=600,
-        left_margin=10mm,
-        bottom_margin=10mm,
-        title=["Shuttle Displacement" "Shuttle Velocity" "Electrode Displacement" "Electrode Velocity" "Output Voltage" "Relative Displacement"],
-        titlelocation=:center,
-        titlefontsize=10
-    )
-    
-    # Plot each state variable
-    # 1. Shuttle displacement
-    plot!(
-        p_states[1],
-        plot_time, 
-        plot_z1 .* 1e6,  # Convert to μm
-        linewidth=2,
-        color=:royalblue3,
-        xlabel="",
-        ylabel=L"x_1 ($\mu$m)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 2. Shuttle velocity
-    plot!(
-        p_states[2],
-        plot_time, 
-        plot_z1dot .* 1e3,  # Convert to mm/s
-        linewidth=2,
-        color=:firebrick3,
-        xlabel="",
-        ylabel=L"\dot{x}_1 (mm/s)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 3. Electrode displacement
-    plot!(
-        p_states[3],
-        plot_time, 
-        plot_z2 .* 1e6,  # Convert to μm
-        linewidth=2,
-        color=:green4,
-        xlabel="",
-        ylabel=L"x_2 ($\mu$m)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 4. Electrode velocity
-    plot!(
-        p_states[4],
-        plot_time, 
-        plot_z2dot .* 1e3,  # Convert to mm/s
-        linewidth=2,
-        color=:purple3,
-        xlabel="",
-        ylabel=L"\dot{x}_2 (mm/s)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 5. Output voltage
-    plot!(
-        p_states[5],
-        plot_time, 
-        plot_vout .* 1e3,  # Convert to mV
-        linewidth=2,
-        color=:darkorange2,
-        xlabel=L"Time $t$ (s)",
-        ylabel=L"V_{out} (mV)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 6. Relative displacement (x1-x2)
-    plot!(
-        p_states[6],
-        plot_time, 
-        (plot_z1 - plot_z2) .* 1e6,  # Convert to μm
-        linewidth=2,
-        color=:teal,
-        xlabel=L"Time $t$ (s)",
-        ylabel=L"x_1 - x_2 ($\mu$m)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # Add a common title
-    plot!(
-        p_states,
-        title=L"State Variables at Resonance Frequency $f = %$(round(Int, res_freq))$ Hz",
-        titlelocation=:center,
-        titlefontsize=14
-    )
-    
-    # Save the state variables plot
-    savefig(p_states, "state_variables_resonance.pdf")
-    savefig(p_states, "state_variables_resonance.png")
-    
-    # 3. Force Plots at Resonance
-    # Extract forces in the time window
-    plot_Fs = resonance_forces["Fs"][time_indices]
-    plot_Fc = resonance_forces["Fc"][time_indices]
-    plot_Fd = resonance_forces["Fd"][time_indices]
-    plot_Fe = resonance_forces["Fe"][time_indices]
-    plot_Fext = resonance_forces["Fext"][time_indices]
-    plot_CollisionState = resonance_forces["CollisionState"][time_indices]
-    
-    # Create a multi-panel force plot
-    p_forces = plot(
-        layout=(3,2),
-        size=(900, 1000),
-        dpi=600,
-        left_margin=10mm,
-        bottom_margin=10mm,
-        title=["Spring Force" "Collision Force" "Damping Force" "Electrostatic Force" "External Force" "Collision State"],
-        titlelocation=:center,
-        titlefontsize=10
-    )
-    
-    # Plot each force
-    # 1. Spring force
-    plot!(
-        p_forces[1],
-        plot_time, 
-        plot_Fs .* 1e6,  # Convert to μN
-        linewidth=2,
-        color=:royalblue3,
-        xlabel="",
-        ylabel=L"F_s ($\mu$N)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 2. Collision force
-    plot!(
-        p_forces[2],
-        plot_time, 
-        plot_Fc .* 1e6,  # Convert to μN
-        linewidth=2,
-        color=:firebrick3,
-        xlabel="",
-        ylabel=L"F_c ($\mu$N)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 3. Damping force
-    plot!(
-        p_forces[3],
-        plot_time, 
-        plot_Fd .* 1e6,  # Convert to μN
-        linewidth=2,
-        color=:green4,
-        xlabel="",
-        ylabel=L"F_d ($\mu$N)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 4. Electrostatic force
-    plot!(
-        p_forces[4],
-        plot_time, 
-        plot_Fe .* 1e6,  # Convert to μN
-        linewidth=2,
-        color=:purple3,
-        xlabel="",
-        ylabel=L"F_e ($\mu$N)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 5. External force
-    plot!(
-        p_forces[5],
-        plot_time, 
-        plot_Fext .* 1e6,  # Convert to μN
-        linewidth=2,
-        color=:darkorange2,
-        xlabel=L"Time $t$ (s)",
-        ylabel=L"F_{ext} ($\mu$N)",
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # 6. Collision state transitions
-    plot!(
-        p_forces[6],
-        plot_time, 
-        [s == "translational" ? 0 : 1 for s in plot_CollisionState],
-        linewidth=2,
-        color=:black,
-        xlabel=L"Time $t$ (s)",
-        ylabel="State",
-        yticks=([0, 1], ["Trans.", "Rot."]),
-        legend=false,
-        framestyle=:box,
-        xlims=(start_time, end_time),
-        xticks=start_time:0.02:end_time
-    )
-    
-    # Add a common title
-    plot!(
-        p_forces,
-        title=L"Forces at Resonance Frequency $f = %$(round(Int, res_freq))$ Hz",
-        titlelocation=:center,
-        titlefontsize=14
-    )
-    
-    # Save the force plot
-    savefig(p_forces, "forces_resonance.pdf")
-    savefig(p_forces, "forces_resonance.png")
-end
+savefig(p_paper, "paper_figure_opt.pdf")
+savefig(p_paper, "paper_figure_opt.png")
 
-# Calculate some statistical highlights from the data
-peak_voltage_idx = argmax(rms_vout_values)
-peak_voltage_freq = freq_values[peak_voltage_idx]
-peak_voltage_value = rms_vout_values[peak_voltage_idx] * 1000  # Convert to mV
+println("All optimized plots created successfully!")
 
-peak_disp_idx = argmax(max_z1_values)
-peak_disp_freq = freq_values[peak_disp_idx]
-peak_disp_value = max_z1_values[peak_disp_idx] * 1e6  # Convert to μm
-
-println("Statistical highlights:")
-println("Peak RMS voltage: $(round(peak_voltage_value, digits=2)) mV at $(round(peak_voltage_freq, digits=1)) Hz")
-println("Peak displacement: $(round(peak_disp_value, digits=2)) μm at $(round(peak_disp_freq, digits=1)) Hz")

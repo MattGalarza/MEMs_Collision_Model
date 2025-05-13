@@ -1,6 +1,5 @@
 using Plots
-gr() # Explicitly use GR backend
-
+gr()
 
 # Create a new plot with higher quality settings
 plt = plot(

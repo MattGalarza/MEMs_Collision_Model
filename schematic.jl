@@ -1,6 +1,7 @@
 using Plots
 gr() # Explicitly use GR backend
 
+
 # Create a new plot with higher quality settings
 plt = plot(
     aspect_ratio=:equal,

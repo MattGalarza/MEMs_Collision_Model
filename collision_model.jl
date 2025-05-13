@@ -1,6 +1,6 @@
 # ------------------------------------------ Libraries --------------------------------------
 
-using Sundials, ForwardDiff, DifferentialEquations, OrdinaryDiffEq
+using Sundials, ForwardDiff, DifferentialEquations, OrdinaryDiffEq, Plots
 
 # --------------------------------------- Analytical Model ----------------------------------
 
@@ -17,7 +17,7 @@ export Params, p, electrostatic, CoupledSystem!
     m1::T = 2.0933e-6        # Shuttle mass (kg)
     E::T = 180e9             # Young's modulus (Pa)
     eta::T = 1.849e-5        # Dynamic viscosity of air (Pa·s)
-    c::T = 0.15             # Damping scaling factor
+    c::T = 0.015             # Damping scaling factor
     g0::T = 14e-6            # Electrode gap (m)
     Tp::T = 120e-9           # Thickness of parylene layer (m)
     Tf::T = 25e-6            # Device thickness (m)
@@ -205,7 +205,7 @@ end
 
 # Sine Wave External Force
 f = 20.0 # Frequency (Hz)
-alpha = 2.0 # Applied acceleration constant
+alpha = 1.0 # Applied acceleration constant
 g = 9.81 # Gravitational constant 
 A = alpha * g
 t_ramp = 0.2 # Ramp-up duration (s)

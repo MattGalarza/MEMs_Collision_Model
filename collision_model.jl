@@ -64,8 +64,8 @@ p = Params{Float64}()
 
 # Suspension spring force, Fsp
 function spring(x1, k1, k3, gss, kss)
-    Fsp = - k1 * x1 - k3 * (x1^3) # Suspension beam force
-    # Fsp = -k1 * x1 # Suspension beam force
+    # Fsp = - k1 * x1 - k3 * (x1^3) # Suspension beam force
+    Fsp = -k1 * x1 # Suspension beam force
     if abs(x1) < gss
         Fss = 0.0
     else
@@ -86,7 +86,7 @@ function collision(x1, x2, m2, ke, gp)
 end
 
 # Viscous damping, Fd
-function damping1(x2, x2dot, a, c, gp, Leff, Tf, eta)  
+function damping(x2, x2dot, a, c, gp, Leff, Tf, eta)  
     # Damping LHS
     ul = gp + x2
     ll = ul + a * Leff
@@ -110,7 +110,7 @@ function damping1(x2, x2dot, a, c, gp, Leff, Tf, eta)
     return Fd
 end
 
-function damping(x2, x2dot, a, c, gp, Leff, Tf, eta)  
+function damping2(x2, x2dot, a, c, gp, Leff, Tf, eta)  
     # Damping for left side (LHS)
     Fd_l = (12 * eta * Tf * x2dot / a^4) * (
         (2 * a * Leff) / (2 * (gp + x2) + a * Leff) + 
@@ -185,7 +185,7 @@ function CoupledSystem!(dz, z, p, t, current_acceleration)
     dz[1] = z2
     dz[2] = (Fs + (p.N / 2) * Fc) / p.m1 - Fext
     dz[3] = z4
-    dz[4] = (-Fc + Fd + Fe) / m2 
+    dz[4] = (-Fc + Fd + Fe) / m2 - Fext
     dz[5] = (p.Vbias - (z5 / Ctotal)) / p.Rload
     dz[6] = (p.Vbias - z5 / Ctotal - Vout) / (p.Rload * Ctotal)
 end
@@ -205,7 +205,7 @@ end
 
 # Sine Wave External Force
 f = 20.0 # Frequency (Hz)
-alpha = 1.0 # Applied acceleration constant
+alpha = 5.5 # Applied acceleration constant
 g = 9.81 # Gravitational constant 
 A = alpha * g
 t_ramp = 0.2 # Ramp-up duration (s)

@@ -513,8 +513,275 @@ display(p12)
 p13 = plot(sol.t, Fext_input, xlabel = "Time (s)", ylabel = "Fext (N)", title = "Applied External Force")
 display(p13)
 
+# --------------------------------------- Fancy Plots ---------------------------------------
+# Journal-Quality Individual Plots for State Variables and Forces
+using Plots, LaTeXStrings
 
- # --------------------------------------- Frequency Sweep ---------------------------------------
+# Define high-quality theme for journal publication
+function set_journal_theme()
+    default(
+        fontfamily="Computer Modern",  # LaTeX-like font
+        linewidth=2.5,                 # Thicker lines
+        foreground_color_legend=nothing, # Transparent legend background
+        background_color_legend=nothing, # Transparent legend background
+        legendfontsize=10,             # Legend font size
+        guidefontsize=12,              # Axis label font size
+        tickfontsize=10,               # Tick label font size
+        titlefontsize=14,              # Title font size
+        size=(800, 600),               # Figure size
+        dpi=600,                       # High DPI for print quality
+        margin=10mm,                   # Margins around the plot
+        grid=false,                    # No grid by default
+        framestyle=:box,               # Box-style frame
+        foreground_color_axis=:black,  # Black axes
+        tick_direction=:out,           # Ticks pointing outward
+        palette=:default               # Color palette
+    )
+end
+
+# Apply the theme
+set_journal_theme()
+
+# 1. Shuttle Displacement (x1)
+p_x1 = plot(
+    sol.t, 
+    x1 .* 1e6,  # Convert to μm for better visualization
+    linewidth=2.5,
+    color=:royalblue3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Shuttle Displacement $x_1$ ($\mu$m)",
+    title="",  # Journal plots often don't have titles
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_x1, "shuttle_displacement.pdf")  # PDF for publication
+savefig(p_x1, "shuttle_displacement.png")  # PNG for quick viewing
+
+# 2. Shuttle Velocity (x1dot)
+p_x1dot = plot(
+    sol.t, 
+    x1dot .* 1e3,  # Convert to mm/s
+    linewidth=2.5,
+    color=:firebrick3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Shuttle Velocity $\dot{x}_1$ (mm/s)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_x1dot, "shuttle_velocity.pdf")
+savefig(p_x1dot, "shuttle_velocity.png")
+
+# 3. Electrode Displacement (x2)
+p_x2 = plot(
+    sol.t, 
+    x2 .* 1e6,  # Convert to μm
+    linewidth=2.5,
+    color=:green4,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Electrode Displacement $x_2$ ($\mu$m)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_x2, "electrode_displacement.pdf")
+savefig(p_x2, "electrode_displacement.png")
+
+# 4. Electrode Velocity (x2dot)
+p_x2dot = plot(
+    sol.t, 
+    x2dot .* 1e3,  # Convert to mm/s
+    linewidth=2.5,
+    color=:purple3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Electrode Velocity $\dot{x}_2$ (mm/s)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_x2dot, "electrode_velocity.pdf")
+savefig(p_x2dot, "electrode_velocity.png")
+
+# 5. Charge (Qvar)
+p_qvar = plot(
+    sol.t, 
+    Qvar .* 1e12,  # Convert to pC
+    linewidth=2.5,
+    color=:darkorange,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Charge $Q_{var}$ (pC)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_qvar, "charge.pdf")
+savefig(p_qvar, "charge.png")
+
+# 6. Output Voltage (V)
+p_vout = plot(
+    sol.t, 
+    V .* 1e3,  # Convert to mV
+    linewidth=2.5,
+    color=:darkorange2,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Output Voltage $V_{out}$ (mV)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_vout, "output_voltage.pdf")
+savefig(p_vout, "output_voltage.png")
+
+# 7. Relative Displacement (x1-x2)
+rel_disp = x1 - x2  # Calculate relative displacement
+p_rel = plot(
+    sol.t, 
+    rel_disp .* 1e6,  # Convert to μm
+    linewidth=2.5,
+    color=:teal,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Relative Displacement $x_1 - x_2$ ($\mu$m)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_rel, "relative_displacement.pdf")
+savefig(p_rel, "relative_displacement.png")
+
+# 1. Suspension Spring Force (Fs)
+p_fs = plot(
+    sol.t, 
+    Fs_array .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:royalblue3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Spring Force $F_s$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_fs, "spring_force.pdf")
+savefig(p_fs, "spring_force.png")
+
+# 2. Collision Force (Fc)
+p_fc = plot(
+    sol.t, 
+    Fc_array .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:firebrick3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Collision Force $F_c$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_fc, "collision_force.pdf")
+savefig(p_fc, "collision_force.png")
+
+# 3. Damping Force (Fd)
+p_fd = plot(
+    sol.t, 
+    Fd_array .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:green4,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Damping Force $F_d$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_fd, "damping_force.pdf")
+savefig(p_fd, "damping_force.png")
+
+# 4. Electrostatic Force (Fe)
+p_fe = plot(
+    sol.t, 
+    Fe_array .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:purple3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Electrostatic Force $F_e$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_fe, "electrostatic_force.pdf")
+savefig(p_fe, "electrostatic_force.png")
+
+# 5. External Force (Fext)
+p_fext = plot(
+    sol.t, 
+    [Fext_input(t) for t in sol.t] .* 1e6,  # Calculate and convert to μN
+    linewidth=2.5,
+    color=:darkorange2,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"External Force $F_{ext}$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_fext, "external_force.pdf")
+savefig(p_fext, "external_force.png")
+
+# 6. Collision State
+collision_numeric = [s == "translational" ? 0 : 1 for s in CollisionState_array]
+p_cs = plot(
+    sol.t, 
+    collision_numeric,
+    linewidth=2.5,
+    color=:black,
+    xlabel=L"Time $t$ (s)",
+    ylabel="Collision State",
+    yticks=([0, 1], ["Translational", "Rotational"]),
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    margin=10mm
+)
+savefig(p_cs, "collision_state.pdf")
+savefig(p_cs, "collision_state.png")
+
+println("All individual journal-quality plots created successfully!")
+
+# --------------------------------------- Frequency Sweep ---------------------------------------
 using Statistics, Plots, Printf, LaTeXStrings, StatsBase
 
 # Define the frequency range and increments

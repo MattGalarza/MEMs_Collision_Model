@@ -515,7 +515,7 @@ display(p13)
 
 # --------------------------------------- Fancy Plots ---------------------------------------
 # Journal-Quality Individual Plots for State Variables and Forces
-using Plots, LaTeXStrings
+using Plots, LaTeXStrings, Measures
 
 # Define high-quality theme for journal publication
 function set_journal_theme()
@@ -546,7 +546,7 @@ set_journal_theme()
 p_x1 = plot(
     sol.t, 
     x1 .* 1e6,  # Convert to μm for better visualization
-    linewidth=2.5,
+    linewidth=1.0,
     color=:royalblue3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Shuttle Displacement $x_1$ ($\mu$m)",
@@ -555,7 +555,10 @@ p_x1 = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_x1, "shuttle_displacement.pdf")  # PDF for publication
 savefig(p_x1, "shuttle_displacement.png")  # PNG for quick viewing
@@ -564,7 +567,7 @@ savefig(p_x1, "shuttle_displacement.png")  # PNG for quick viewing
 p_x1dot = plot(
     sol.t, 
     x1dot .* 1e3,  # Convert to mm/s
-    linewidth=2.5,
+    linewidth=1.5,
     color=:firebrick3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Shuttle Velocity $\dot{x}_1$ (mm/s)",
@@ -573,7 +576,10 @@ p_x1dot = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_x1dot, "shuttle_velocity.pdf")
 savefig(p_x1dot, "shuttle_velocity.png")
@@ -582,7 +588,7 @@ savefig(p_x1dot, "shuttle_velocity.png")
 p_x2 = plot(
     sol.t, 
     x2 .* 1e6,  # Convert to μm
-    linewidth=2.5,
+    linewidth=1.5,
     color=:green4,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Electrode Displacement $x_2$ ($\mu$m)",
@@ -591,7 +597,10 @@ p_x2 = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_x2, "electrode_displacement.pdf")
 savefig(p_x2, "electrode_displacement.png")
@@ -600,7 +609,7 @@ savefig(p_x2, "electrode_displacement.png")
 p_x2dot = plot(
     sol.t, 
     x2dot .* 1e3,  # Convert to mm/s
-    linewidth=2.5,
+    linewidth=1.5,
     color=:purple3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Electrode Velocity $\dot{x}_2$ (mm/s)",
@@ -609,7 +618,10 @@ p_x2dot = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_x2dot, "electrode_velocity.pdf")
 savefig(p_x2dot, "electrode_velocity.png")
@@ -618,7 +630,7 @@ savefig(p_x2dot, "electrode_velocity.png")
 p_qvar = plot(
     sol.t, 
     Qvar .* 1e12,  # Convert to pC
-    linewidth=2.5,
+    linewidth=1.5,
     color=:darkorange,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Charge $Q_{var}$ (pC)",
@@ -627,7 +639,10 @@ p_qvar = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_qvar, "charge.pdf")
 savefig(p_qvar, "charge.png")
@@ -636,7 +651,7 @@ savefig(p_qvar, "charge.png")
 p_vout = plot(
     sol.t, 
     V .* 1e3,  # Convert to mV
-    linewidth=2.5,
+    linewidth=1.5,
     color=:darkorange2,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Output Voltage $V_{out}$ (mV)",
@@ -645,7 +660,10 @@ p_vout = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_vout, "output_voltage.pdf")
 savefig(p_vout, "output_voltage.png")
@@ -655,7 +673,7 @@ rel_disp = x1 - x2  # Calculate relative displacement
 p_rel = plot(
     sol.t, 
     rel_disp .* 1e6,  # Convert to μm
-    linewidth=2.5,
+    linewidth=1.5,
     color=:teal,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Relative Displacement $x_1 - x_2$ ($\mu$m)",
@@ -664,7 +682,10 @@ p_rel = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_rel, "relative_displacement.pdf")
 savefig(p_rel, "relative_displacement.png")
@@ -673,7 +694,7 @@ savefig(p_rel, "relative_displacement.png")
 p_fs = plot(
     sol.t, 
     Fs_array .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.5,
     color=:royalblue3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Spring Force $F_s$ ($\mu$N)",
@@ -682,7 +703,10 @@ p_fs = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_fs, "spring_force.pdf")
 savefig(p_fs, "spring_force.png")
@@ -691,7 +715,7 @@ savefig(p_fs, "spring_force.png")
 p_fc = plot(
     sol.t, 
     Fc_array .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.5,
     color=:firebrick3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Collision Force $F_c$ ($\mu$N)",
@@ -700,7 +724,10 @@ p_fc = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_fc, "collision_force.pdf")
 savefig(p_fc, "collision_force.png")
@@ -709,7 +736,7 @@ savefig(p_fc, "collision_force.png")
 p_fd = plot(
     sol.t, 
     Fd_array .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.5,
     color=:green4,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Damping Force $F_d$ ($\mu$N)",
@@ -718,7 +745,10 @@ p_fd = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_fd, "damping_force.pdf")
 savefig(p_fd, "damping_force.png")
@@ -727,7 +757,7 @@ savefig(p_fd, "damping_force.png")
 p_fe = plot(
     sol.t, 
     Fe_array .* 1e6,  # Convert to μN
-    linewidth=2.5,
+    linewidth=1.5,
     color=:purple3,
     xlabel=L"Time $t$ (s)",
     ylabel=L"Electrostatic Force $F_e$ ($\mu$N)",
@@ -736,7 +766,10 @@ p_fe = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_fe, "electrostatic_force.pdf")
 savefig(p_fe, "electrostatic_force.png")
@@ -745,7 +778,7 @@ savefig(p_fe, "electrostatic_force.png")
 p_fext = plot(
     sol.t, 
     [Fext_input(t) for t in sol.t] .* 1e6,  # Calculate and convert to μN
-    linewidth=2.5,
+    linewidth=1.5,
     color=:darkorange2,
     xlabel=L"Time $t$ (s)",
     ylabel=L"External Force $F_{ext}$ ($\mu$N)",
@@ -754,7 +787,10 @@ p_fext = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
 savefig(p_fext, "external_force.pdf")
 savefig(p_fext, "external_force.png")
@@ -764,6 +800,401 @@ collision_numeric = [s == "translational" ? 0 : 1 for s in CollisionState_array]
 p_cs = plot(
     sol.t, 
     collision_numeric,
+    linewidth=1.5,
+    color=:black,
+    xlabel=L"Time $t$ (s)",
+    ylabel="Collision State",
+    yticks=([0, 1], ["Translational", "Rotational"]),
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_cs, "collision_state.pdf")
+savefig(p_cs, "collision_state.png")
+
+println("All individual journal-quality plots created successfully!")
+
+
+
+# Journal-Quality Individual Plots for State Variables and Forces (2 Oscillations)
+using Plots, LaTeXStrings, Measures, Statistics
+
+# Define high-quality theme for journal publication
+function set_journal_theme()
+    default(
+        fontfamily="Computer Modern",  # LaTeX-like font
+        linewidth=2.5,                 # Thicker lines
+        foreground_color_legend=nothing, # Transparent legend background
+        background_color_legend=nothing, # Transparent legend background
+        legendfontsize=10,             # Legend font size
+        guidefontsize=12,              # Axis label font size
+        tickfontsize=10,               # Tick label font size
+        titlefontsize=14,              # Title font size
+        size=(800, 600),               # Figure size
+        dpi=600,                       # High DPI for print quality
+        grid=false,                    # No grid by default
+        framestyle=:box,               # Box-style frame
+        foreground_color_axis=:black,  # Black axes
+        tick_direction=:out,           # Ticks pointing outward
+        palette=:default               # Color palette
+    )
+end
+
+# Apply the theme
+set_journal_theme()
+
+# Function to detect oscillation period and select window for 2 oscillations
+function select_two_oscillations(time, signal; start_time=0.2)
+    # Find the start index (after initial transients)
+    start_idx = findfirst(t -> t >= start_time, time)
+    if start_idx === nothing
+        start_idx = 1
+    end
+    
+    # Extract data starting from start_idx
+    trimmed_time = time[start_idx:end]
+    trimmed_signal = signal[start_idx:end]
+    
+    # Find peaks to determine period
+    peaks = Int[]
+    for i in 2:(length(trimmed_signal)-1)
+        if trimmed_signal[i] > trimmed_signal[i-1] && trimmed_signal[i] > trimmed_signal[i+1]
+            push!(peaks, i)
+            if length(peaks) >= 3  # We need at least 3 peaks to get 2 complete oscillations
+                break
+            end
+        end
+    end
+    
+    # If not enough peaks found, use a default number of points
+    if length(peaks) < 3
+        # Try to find valleys instead if signal is predominantly negative
+        valleys = Int[]
+        for i in 2:(length(trimmed_signal)-1)
+            if trimmed_signal[i] < trimmed_signal[i-1] && trimmed_signal[i] < trimmed_signal[i+1]
+                push!(valleys, i)
+                if length(valleys) >= 3
+                    break
+                end
+            end
+        end
+        
+        # If still not enough features found, just use a default window
+        if length(valleys) < 3
+            end_idx = min(start_idx + 1000, length(time))
+            return start_idx, end_idx
+        else
+            # Use valleys to determine period
+            t1 = trimmed_time[valleys[1]]
+            t3 = trimmed_time[valleys[3]]
+            period = (t3 - t1) / 2
+            end_time = trimmed_time[1] + 2 * period
+            end_idx = findfirst(t -> t >= end_time, time)
+            return start_idx, end_idx
+        end
+    else
+        # Use peaks to determine period
+        t1 = trimmed_time[peaks[1]]
+        t3 = trimmed_time[peaks[3]]
+        period = (t3 - t1) / 2
+        end_time = trimmed_time[1] + 2 * period
+        end_idx = findfirst(t -> t >= end_time, time)
+        return start_idx, end_idx
+    end
+end
+
+# Determine the time window for 2 oscillations using the shuttle displacement (x1)
+start_idx, end_idx = select_two_oscillations(sol.t, x1)
+plot_time = sol.t[start_idx:end_idx]
+plot_x1 = x1[start_idx:end_idx]
+plot_x1dot = x1dot[start_idx:end_idx]
+plot_x2 = x2[start_idx:end_idx]
+plot_x2dot = x2dot[start_idx:end_idx]
+plot_Qvar = Qvar[start_idx:end_idx]
+plot_V = V[start_idx:end_idx]
+plot_rel_disp = plot_x1 - plot_x2
+plot_Fs = Fs_array[start_idx:end_idx]
+plot_Fc = Fc_array[start_idx:end_idx]
+plot_Fd = Fd_array[start_idx:end_idx]
+plot_Fe = Fe_array[start_idx:end_idx]
+plot_Fext = [Fext_input(t) for t in plot_time]
+plot_collision_state = CollisionState_array[start_idx:end_idx]
+plot_collision_numeric = [s == "translational" ? 0 : 1 for s in plot_collision_state]
+
+# Print the selected time range
+println("Selected time range: $(plot_time[1]) to $(plot_time[end]) seconds")
+println("Number of data points: $(length(plot_time))")
+
+##############################################################################
+# STATE VARIABLE PLOTS (2 OSCILLATIONS)
+##############################################################################
+
+# 1. Shuttle Displacement (x1)
+p_x1 = plot(
+    plot_time, 
+    plot_x1 .* 1e6,  # Convert to μm for better visualization
+    linewidth=2.5,
+    color=:royalblue3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Shuttle Displacement $x_1$ ($\mu$m)",
+    title="",  # Journal plots often don't have titles
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_x1, "shuttle_displacement_2osc.pdf")
+savefig(p_x1, "shuttle_displacement_2osc.png")
+
+# 2. Shuttle Velocity (x1dot)
+p_x1dot = plot(
+    plot_time, 
+    plot_x1dot .* 1e3,  # Convert to mm/s
+    linewidth=2.5,
+    color=:firebrick3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Shuttle Velocity $\dot{x}_1$ (mm/s)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_x1dot, "shuttle_velocity_2osc.pdf")
+savefig(p_x1dot, "shuttle_velocity_2osc.png")
+
+# 3. Electrode Displacement (x2)
+p_x2 = plot(
+    plot_time, 
+    plot_x2 .* 1e6,  # Convert to μm
+    linewidth=2.5,
+    color=:green4,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Electrode Displacement $x_2$ ($\mu$m)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_x2, "electrode_displacement_2osc.pdf")
+savefig(p_x2, "electrode_displacement_2osc.png")
+
+# 4. Electrode Velocity (x2dot)
+p_x2dot = plot(
+    plot_time, 
+    plot_x2dot .* 1e3,  # Convert to mm/s
+    linewidth=2.5,
+    color=:purple3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Electrode Velocity $\dot{x}_2$ (mm/s)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_x2dot, "electrode_velocity_2osc.pdf")
+savefig(p_x2dot, "electrode_velocity_2osc.png")
+
+# 5. Charge (Qvar)
+p_qvar = plot(
+    plot_time, 
+    plot_Qvar .* 1e12,  # Convert to pC
+    linewidth=2.5,
+    color=:darkorange,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Charge $Q_{var}$ (pC)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_qvar, "charge_2osc.pdf")
+savefig(p_qvar, "charge_2osc.png")
+
+# 6. Output Voltage (V)
+p_vout = plot(
+    plot_time, 
+    plot_V .* 1e3,  # Convert to mV
+    linewidth=2.5,
+    color=:darkorange2,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Output Voltage $V_{out}$ (mV)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_vout, "output_voltage_2osc.pdf")
+savefig(p_vout, "output_voltage_2osc.png")
+
+# 7. Relative Displacement (x1-x2)
+p_rel = plot(
+    plot_time, 
+    plot_rel_disp .* 1e6,  # Convert to μm
+    linewidth=2.5,
+    color=:teal,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Relative Displacement $x_1 - x_2$ ($\mu$m)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_rel, "relative_displacement_2osc.pdf")
+savefig(p_rel, "relative_displacement_2osc.png")
+
+##############################################################################
+# FORCE PLOTS (2 OSCILLATIONS)
+##############################################################################
+
+# 1. Suspension Spring Force (Fs)
+p_fs = plot(
+    plot_time, 
+    plot_Fs .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:royalblue3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Spring Force $F_s$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_fs, "spring_force_2osc.pdf")
+savefig(p_fs, "spring_force_2osc.png")
+
+# 2. Collision Force (Fc)
+p_fc = plot(
+    plot_time, 
+    plot_Fc .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:firebrick3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Collision Force $F_c$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_fc, "collision_force_2osc.pdf")
+savefig(p_fc, "collision_force_2osc.png")
+
+# 3. Damping Force (Fd)
+p_fd = plot(
+    plot_time, 
+    plot_Fd .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:green4,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Damping Force $F_d$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_fd, "damping_force_2osc.pdf")
+savefig(p_fd, "damping_force_2osc.png")
+
+# 4. Electrostatic Force (Fe)
+p_fe = plot(
+    plot_time, 
+    plot_Fe .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:purple3,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"Electrostatic Force $F_e$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_fe, "electrostatic_force_2osc.pdf")
+savefig(p_fe, "electrostatic_force_2osc.png")
+
+# 5. External Force (Fext)
+p_fext = plot(
+    plot_time, 
+    plot_Fext .* 1e6,  # Convert to μN
+    linewidth=2.5,
+    color=:darkorange2,
+    xlabel=L"Time $t$ (s)",
+    ylabel=L"External Force $F_{ext}$ ($\mu$N)",
+    title="",
+    framestyle=:box,
+    legend=false,
+    dpi=600,
+    size=(800, 500),
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
+)
+savefig(p_fext, "external_force_2osc.pdf")
+savefig(p_fext, "external_force_2osc.png")
+
+# 6. Collision State
+p_cs = plot(
+    plot_time, 
+    plot_collision_numeric,
     linewidth=2.5,
     color=:black,
     xlabel=L"Time $t$ (s)",
@@ -774,12 +1205,88 @@ p_cs = plot(
     legend=false,
     dpi=600,
     size=(800, 500),
-    margin=10mm
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm
 )
-savefig(p_cs, "collision_state.pdf")
-savefig(p_cs, "collision_state.png")
+savefig(p_cs, "collision_state_2osc.pdf")
+savefig(p_cs, "collision_state_2osc.png")
 
-println("All individual journal-quality plots created successfully!")
+# Create a combined state variables plot (2x3)
+p_states = plot(
+    layout=(2,3),
+    size=(1200, 800),
+    dpi=600,
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm,
+    plot_title="MEMS Energy Harvester: State Variables (2 Oscillations)",
+    plot_titlelocation=:center,
+    plot_titlefontsize=14
+)
+
+# Add each state variable to the combined plot
+plot!(p_states[1], plot_time, plot_x1 .* 1e6, linewidth=2, color=:royalblue3, 
+      xlabel="", ylabel=L"$x_1$ ($\mu$m)", title="Shuttle Displacement", legend=false)
+      
+plot!(p_states[2], plot_time, plot_x1dot .* 1e3, linewidth=2, color=:firebrick3, 
+      xlabel="", ylabel=L"$\dot{x}_1$ (mm/s)", title="Shuttle Velocity", legend=false)
+      
+plot!(p_states[3], plot_time, plot_x2 .* 1e6, linewidth=2, color=:green4, 
+      xlabel="", ylabel=L"$x_2$ ($\mu$m)", title="Electrode Displacement", legend=false)
+      
+plot!(p_states[4], plot_time, plot_x2dot .* 1e3, linewidth=2, color=:purple3, 
+      xlabel=L"Time $t$ (s)", ylabel=L"$\dot{x}_2$ (mm/s)", title="Electrode Velocity", legend=false)
+      
+plot!(p_states[5], plot_time, plot_V .* 1e3, linewidth=2, color=:darkorange2, 
+      xlabel=L"Time $t$ (s)", ylabel=L"$V_{out}$ (mV)", title="Output Voltage", legend=false)
+      
+plot!(p_states[6], plot_time, plot_rel_disp .* 1e6, linewidth=2, color=:teal, 
+      xlabel=L"Time $t$ (s)", ylabel=L"$x_1 - x_2$ ($\mu$m)", title="Relative Displacement", legend=false)
+
+savefig(p_states, "combined_states_2osc.pdf")
+savefig(p_states, "combined_states_2osc.png")
+
+# Create a combined forces plot (2x3)
+p_forces = plot(
+    layout=(2,3),
+    size=(1200, 800),
+    dpi=600,
+    left_margin=10mm,
+    bottom_margin=10mm,
+    top_margin=5mm,
+    right_margin=5mm,
+    plot_title="MEMS Energy Harvester: Forces (2 Oscillations)",
+    plot_titlelocation=:center,
+    plot_titlefontsize=14
+)
+
+# Add each force to the combined plot
+plot!(p_forces[1], plot_time, plot_Fs .* 1e6, linewidth=2, color=:royalblue3, 
+      xlabel="", ylabel=L"$F_s$ ($\mu$N)", title="Spring Force", legend=false)
+      
+plot!(p_forces[2], plot_time, plot_Fc .* 1e6, linewidth=2, color=:firebrick3, 
+      xlabel="", ylabel=L"$F_c$ ($\mu$N)", title="Collision Force", legend=false)
+      
+plot!(p_forces[3], plot_time, plot_Fd .* 1e6, linewidth=2, color=:green4, 
+      xlabel="", ylabel=L"$F_d$ ($\mu$N)", title="Damping Force", legend=false)
+      
+plot!(p_forces[4], plot_time, plot_Fe .* 1e6, linewidth=2, color=:purple3, 
+      xlabel=L"Time $t$ (s)", ylabel=L"$F_e$ ($\mu$N)", title="Electrostatic Force", legend=false)
+      
+plot!(p_forces[5], plot_time, plot_Fext .* 1e6, linewidth=2, color=:darkorange2, 
+      xlabel=L"Time $t$ (s)", ylabel=L"$F_{ext}$ ($\mu$N)", title="External Force", legend=false)
+      
+plot!(p_forces[6], plot_time, plot_collision_numeric, linewidth=2, color=:black, 
+      xlabel=L"Time $t$ (s)", ylabel="State", yticks=([0, 1], ["Trans.", "Rot."]), 
+      title="Collision State", legend=false)
+
+savefig(p_forces, "combined_forces_2osc.pdf")
+savefig(p_forces, "combined_forces_2osc.png")
+
+println("All 2-oscillation plots created successfully!")
 
 # --------------------------------------- Frequency Sweep ---------------------------------------
 using Statistics, Plots, Printf, LaTeXStrings, StatsBase

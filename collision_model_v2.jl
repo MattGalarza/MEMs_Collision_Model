@@ -850,8 +850,8 @@ end
 set_journal_theme()
 
 # Fixed time window for exactly 4 oscillations based on the image you shared
-start_time = 0.2775    # Same start time as in the image
-end_time = 0.33     # End time calibrated from the image you provided
+start_time = 0.275    # Same start time as in the image
+end_time = 0.327     # End time calibrated from the image you provided
 
 # Find indices corresponding to the desired time range
 start_idx = findfirst(t -> t >= start_time, sol.t)
@@ -1267,3 +1267,1475 @@ savefig(p_paper, "paper_figure_opt.png")
 
 println("All optimized plots created successfully!")
 
+
+
+# --------------------------------------- Alpha Comparison --------------------------------------
+# Define high-quality theme for journal publication
+function set_journal_theme()
+    default(
+        fontfamily="Computer Modern",  # LaTeX-like font
+        linewidth=2.5,                 # Thicker lines
+        foreground_color_legend=nothing, # Transparent legend background
+        background_color_legend=nothing, # Transparent legend background
+        legendfontsize=10,             # Legend font size
+        guidefontsize=12,              # Axis label font size
+        tickfontsize=10,               # Tick label font size
+        titlefontsize=14,              # Title font size
+        size=(800, 600),               # Figure size
+        dpi=600,                       # High DPI for print quality
+        grid=false,                    # No grid by default
+        framestyle=:box,               # Box-style frame
+        foreground_color_axis=:black,  # Black axes
+        tick_direction=:out,           # Ticks pointing outward
+        palette=:default               # Color palette
+    )
+end
+
+# Apply the theme
+set_journal_theme()
+
+# Main function to generate plots for different alpha values
+function generate_alpha_plots(alpha_values; num_oscillations=4, start_time=0.2, prefix="")
+    # Store results for each alpha value
+    all_results = Dict()
+    
+    # Create a directory for alpha comparison plots if it doesn't exist
+    alpha_dir = "alpha_comparison"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Generate and save plots for each alpha value
+    for (i, alpha) in enumerate(alpha_values)
+        println("Processing α = $alpha ($(i)/$(length(alpha_values)))")
+        
+        # Run the simulation with this alpha value
+        result = run_simulation(alpha)
+        
+        # Store the result
+        all_results[alpha] = result
+        
+        # Generate plots for this alpha value
+        generate_plots_for_alpha(result, alpha, num_oscillations, start_time, prefix)
+    end
+    
+    # Generate comparison plots across all alpha values
+    generate_comparison_plots(all_results, alpha_values, num_oscillations, start_time)
+    
+    return all_results
+end
+
+# Function to run a simulation with a given alpha value
+function run_simulation(alpha)
+    # Set to `true` to use sine wave, `false` for displaced IC
+    use_sine = true
+
+    # Set the external force parameters
+    f = 20.0  # Frequency (Hz)
+    g = 9.81  # Gravitational constant (m/s²)
+    A = alpha * g
+    t_ramp = 0.2  # Ramp-up duration (s)
+    
+    # Define Fext_input based on your choice
+    if use_sine
+        Fext_input = t -> A * (t < t_ramp ? t / t_ramp : 1.0) * sin(2 * π * f * t)
+    else
+        Fext_input = t -> 0.0
+    end
+    
+    # Initialize parameters
+    p_new = deepcopy(AnalyticalModel.p)
+    
+    # Initial conditions
+    x10 = 0.0      # Initial displacement
+    x10dot = 0.0   # Initial velocity
+    x20 = 0.0      # Initial displacement
+    x20dot = 0.0   # Initial velocity
+    
+    # Compute initial electrostatic parameters
+    Ctotal0, Fe0 = AnalyticalModel.electrostatic(
+        x10, x20, 0.0, 
+        p_new.g0, p_new.gp, p_new.a, 
+        p_new.e, p_new.ep, p_new.cp, 
+        p_new.wt, p_new.wb, p_new.ke, 
+        p_new.E, p_new.I, p_new.Leff, 
+        p_new.Tf, p_new.Tp, p_new.N
+    )
+    
+    Q0 = p_new.Vbias * Ctotal0  # Initial charge
+    Vout0 = p_new.Vbias - (Q0 / Ctotal0)  # Initial voltage
+    z0 = [x10, x10dot, x20, x20dot, Q0, Vout0]
+    tspan = (0.0, 0.5)  # simulation length
+    abstol = 1e-9  # absolute solver tolerance
+    reltol = 1e-6  # relative solver tolerance
+    
+    # Define the wrapper function for ODE solver
+    function CoupledSystem_wrapper!(dz, z, p, t)
+        current_acceleration = Fext_input(t)
+        AnalyticalModel.CoupledSystem!(dz, z, p, t, current_acceleration)
+    end
+    
+    # Solve the ODE system
+    eqn = ODEProblem(CoupledSystem_wrapper!, z0, tspan, p_new)
+    sol = solve(eqn, Rosenbrock23(); abstol=abstol, reltol=reltol, maxiters=1e7)
+    
+    # Extract results
+    x1 = [u[1] for u in sol.u]      # Shuttle displacement
+    x1dot = [u[2] for u in sol.u]   # Shuttle velocity
+    x2 = [u[3] for u in sol.u]      # Electrode displacement
+    x2dot = [u[4] for u in sol.u]   # Electrode velocity
+    Qvar = [u[5] for u in sol.u]    # Charge
+    V = [u[6] for u in sol.u]       # Output voltage
+    
+    # Initialize arrays to store forces
+    Fs_array = Float64[]  # Suspension spring force
+    Fc_array = Float64[]  # Collision force
+    Fd_array = Float64[]  # Damping force
+    Fe_array = Float64[]  # Electrostatic force
+    CollisionState_array = String[]  # Collision state
+    
+    # Calculate forces at each time point
+    for (i, t) in enumerate(sol.t)
+        # Extract state variables at time t
+        z = sol.u[i]
+        z1, z2, z3, z4, z5, Vout = z
+        
+        # Compute Fs (Suspension spring force)
+        Fs = AnalyticalModel.spring(z1, p_new.k1, p_new.k3, p_new.gss, p_new.kss)
+        push!(Fs_array, Fs)
+        
+        # Compute Fc (Collision force)
+        Fc, collision_state = AnalyticalModel.collision(z1, z3, p_new.m2, p_new.ke, p_new.gp)
+        push!(Fc_array, Fc)
+        push!(CollisionState_array, collision_state)
+        
+        # Compute Fd (Damping force)
+        if collision_state == "translational"
+            Fd = AnalyticalModel.damping(z1, z2, z3, z4, p_new.a, p_new.c, p_new.gp, p_new.Leff, p_new.Tf, p_new.eta, p_new.lambda, p_new.sigmap)
+        else
+            Fd = AnalyticalModel.damping(z1, z2, z3, z2, p_new.a, p_new.c, p_new.gp, p_new.Leff, p_new.Tf, p_new.eta, p_new.lambda, p_new.sigmap)
+        end
+        push!(Fd_array, Fd)
+        
+        # Compute Fe (Electrostatic force)
+        Ctotalx, Fe = AnalyticalModel.electrostatic(
+            z1, z3, z5, p_new.g0, p_new.gp, p_new.a, 
+            p_new.e, p_new.ep, p_new.cp, p_new.wt, 
+            p_new.wb, p_new.ke, p_new.E, p_new.I, 
+            p_new.Leff, p_new.Tf, p_new.Tp, p_new.N
+        )
+        push!(Fe_array, Fe)
+    end
+    
+    # Return the simulation results as a dictionary
+    return Dict(
+        "time" => sol.t,
+        "x1" => x1,
+        "x1dot" => x1dot,
+        "x2" => x2,
+        "x2dot" => x2dot,
+        "Qvar" => Qvar,
+        "V" => V,
+        "Fs" => Fs_array,
+        "Fc" => Fc_array,
+        "Fd" => Fd_array,
+        "Fe" => Fe_array,
+        "CollisionState" => CollisionState_array,
+        "Fext" => [Fext_input(t) for t in sol.t],
+        "alpha" => alpha,
+        "frequency" => f
+    )
+end
+
+# Function to generate plots for a single alpha value
+function generate_plots_for_alpha(result, alpha, num_oscillations, start_time, prefix)
+    # Calculate the approximate end time based on the frequency and number of oscillations
+    f = result["frequency"]
+    period = 1.0 / f
+    end_time = start_time + num_oscillations * period
+    
+    # Find indices for the specified time window
+    time = result["time"]
+    start_idx = findfirst(t -> t >= start_time, time)
+    end_idx = findfirst(t -> t >= end_time, time)
+    
+    if start_idx === nothing
+        start_idx = 1
+    end
+    if end_idx === nothing
+        end_idx = length(time)
+    end
+    
+    # Extract data for the specified time window
+    plot_time = time[start_idx:end_idx]
+    plot_x1 = result["x1"][start_idx:end_idx]
+    plot_x1dot = result["x1dot"][start_idx:end_idx]
+    plot_x2 = result["x2"][start_idx:end_idx]
+    plot_x2dot = result["x2dot"][start_idx:end_idx]
+    plot_Qvar = result["Qvar"][start_idx:end_idx]
+    plot_V = result["V"][start_idx:end_idx]
+    plot_Fs = result["Fs"][start_idx:end_idx]
+    plot_Fc = result["Fc"][start_idx:end_idx]
+    plot_Fd = result["Fd"][start_idx:end_idx]
+    plot_Fe = result["Fe"][start_idx:end_idx]
+    plot_Fext = result["Fext"][start_idx:end_idx]
+    plot_collision_state = result["CollisionState"][start_idx:end_idx]
+    plot_collision_numeric = [s == "translational" ? 0 : 1 for s in plot_collision_state]
+    
+    # Directory for this alpha value
+    alpha_dir = "alpha_$(alpha)"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Create a combined state variables plot (2x3) with updated layout
+    p_states = plot(
+        layout=(2,3),
+        size=(1200, 800),
+        dpi=600,
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm,
+        plot_title="MEMS Energy Harvester: State Variables (α = $alpha)",
+        plot_titlelocation=:center,
+        plot_titlefontsize=14
+    )
+
+    # Add each state variable to the combined plot with the new layout
+    plot!(p_states[1], plot_time, plot_x1 .* 1e6, linewidth=2, color=:royalblue3, 
+          xlabel="", ylabel=L"$x_1$ ($\mu$m)", title="Shuttle Displacement", legend=false)
+          
+    plot!(p_states[2], plot_time, plot_x1dot .* 1e3, linewidth=2, color=:firebrick3, 
+          xlabel="", ylabel=L"$\dot{x}_1$ (mm/s)", title="Shuttle Velocity", legend=false)
+          
+    plot!(p_states[3], plot_time, plot_x2 .* 1e6, linewidth=2, color=:green4, 
+          xlabel="", ylabel=L"$x_2$ ($\mu$m)", title="Electrode Displacement", legend=false)
+          
+    plot!(p_states[4], plot_time, plot_x2dot .* 1e3, linewidth=2, color=:purple3, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$\dot{x}_2$ (mm/s)", title="Electrode Velocity", legend=false)
+          
+    plot!(p_states[5], plot_time, plot_Qvar .* 1e12, linewidth=2, color=:darkorange, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$Q_{var}$ (pC)", title="Charge", legend=false)
+          
+    plot!(p_states[6], plot_time, plot_V .* 1e3, linewidth=2, color=:darkorange2, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$V_{out}$ (mV)", title="Output Voltage", legend=false)
+
+    savefig(p_states, joinpath(alpha_dir, "$(prefix)combined_states_alpha_$(alpha).pdf"))
+    savefig(p_states, joinpath(alpha_dir, "$(prefix)combined_states_alpha_$(alpha).png"))
+
+    # Create a combined forces plot (2x3)
+    p_forces = plot(
+        layout=(2,3),
+        size=(1200, 800),
+        dpi=600,
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm,
+        plot_title="MEMS Energy Harvester: Forces (α = $alpha)",
+        plot_titlelocation=:center,
+        plot_titlefontsize=14
+    )
+
+    # Add each force to the combined plot
+    plot!(p_forces[1], plot_time, plot_Fs .* 1e6, linewidth=2, color=:royalblue3, 
+          xlabel="", ylabel=L"$F_s$ ($\mu$N)", title="Spring Force", legend=false)
+          
+    plot!(p_forces[2], plot_time, plot_Fc .* 1e6, linewidth=2, color=:firebrick3, 
+          xlabel="", ylabel=L"$F_c$ ($\mu$N)", title="Collision Force", legend=false)
+          
+    plot!(p_forces[3], plot_time, plot_Fd .* 1e6, linewidth=2, color=:green4, 
+          xlabel="", ylabel=L"$F_d$ ($\mu$N)", title="Damping Force", legend=false)
+          
+    plot!(p_forces[4], plot_time, plot_Fe .* 1e6, linewidth=2, color=:purple3, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$F_e$ ($\mu$N)", title="Electrostatic Force", legend=false)
+          
+    plot!(p_forces[5], plot_time, plot_Fext .* 1e6, linewidth=2, color=:darkorange2, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$F_{ext}$ ($\mu$N)", title="External Force", legend=false)
+          
+    plot!(p_forces[6], plot_time, plot_collision_numeric, linewidth=2, color=:black, 
+          xlabel=L"Time $t$ (s)", ylabel="State", yticks=([0, 1], ["Trans.", "Rot."]), 
+          title="Collision State", legend=false)
+
+    savefig(p_forces, joinpath(alpha_dir, "$(prefix)combined_forces_alpha_$(alpha).pdf"))
+    savefig(p_forces, joinpath(alpha_dir, "$(prefix)combined_forces_alpha_$(alpha).png"))
+
+    # Create a comprehensive figure for the paper with just 4 key plots
+    p_paper = plot(
+        layout=(2,2),
+        size=(1200, 1000),
+        dpi=600,
+        left_margin=12mm,
+        bottom_margin=12mm,
+        top_margin=8mm,
+        right_margin=8mm,
+        plot_title="MEMS Electrostatic Energy Harvester Dynamics (α = $alpha)",
+        plot_titlelocation=:center,
+        plot_titlefontsize=16
+    )
+
+    # Add key plots: Displacements, Voltage, Collision Force, and Damping Force
+    plot!(p_paper[1], plot_time, plot_x1 .* 1e6, linewidth=2.5, color=:royalblue3, 
+          xlabel="", ylabel=L"Displacement ($\mu$m)", title="Shuttle and Electrode Displacement", 
+          label=L"$x_1$ (Shuttle)")
+    plot!(p_paper[1], plot_time, plot_x2 .* 1e6, linewidth=2.5, color=:green4, 
+          linestyle=:dash, label=L"$x_2$ (Electrode)")
+          
+    plot!(p_paper[2], plot_time, plot_V .* 1e3, linewidth=2.5, color=:darkorange2, 
+          xlabel="", ylabel=L"Voltage $V_{out}$ (mV)", title="Output Voltage", legend=false)
+          
+    plot!(p_paper[3], plot_time, plot_Fc .* 1e6, linewidth=2.5, color=:firebrick3, 
+          xlabel=L"Time $t$ (s)", ylabel=L"Force $F_c$ ($\mu$N)", title="Collision Force", legend=false)
+          
+    plot!(p_paper[4], plot_time, plot_Fd .* 1e6, linewidth=2.5, color=:green4, 
+          xlabel=L"Time $t$ (s)", ylabel=L"Force $F_d$ ($\mu$N)", title="Damping Force", legend=false)
+
+    savefig(p_paper, joinpath(alpha_dir, "$(prefix)paper_figure_alpha_$(alpha).pdf"))
+    savefig(p_paper, joinpath(alpha_dir, "$(prefix)paper_figure_alpha_$(alpha).png"))
+    
+    return Dict(
+        "states_plot" => p_states,
+        "forces_plot" => p_forces,
+        "paper_plot" => p_paper
+    )
+end
+
+# Function to generate comparison plots across all alpha values
+function generate_comparison_plots(all_results, alpha_values, num_oscillations, start_time)
+    # Create a directory for alpha comparison if it doesn't exist
+    alpha_dir = "alpha_comparison"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Calculate the time range based on the first alpha value
+    f = all_results[alpha_values[1]]["frequency"]
+    period = 1.0 / f
+    end_time = start_time + num_oscillations * period
+    
+    # For each alpha value, extract data for the specified time window
+    trimmed_data = Dict()
+    
+    for alpha in alpha_values
+        result = all_results[alpha]
+        time = result["time"]
+        
+        # Find indices for the specified time window
+        start_idx = findfirst(t -> t >= start_time, time)
+        end_idx = findfirst(t -> t >= end_time, time)
+        
+        if start_idx === nothing
+            start_idx = 1
+        end
+        if end_idx === nothing
+            end_idx = length(time)
+        end
+        
+        # Extract and store the trimmed data
+        trimmed_data[alpha] = Dict(
+            "time" => time[start_idx:end_idx],
+            "x1" => result["x1"][start_idx:end_idx],
+            "x1dot" => result["x1dot"][start_idx:end_idx],
+            "x2" => result["x2"][start_idx:end_idx],
+            "x2dot" => result["x2dot"][start_idx:end_idx],
+            "Qvar" => result["Qvar"][start_idx:end_idx],
+            "V" => result["V"][start_idx:end_idx],
+            "Fs" => result["Fs"][start_idx:end_idx],
+            "Fc" => result["Fc"][start_idx:end_idx],
+            "Fd" => result["Fd"][start_idx:end_idx],
+            "Fe" => result["Fe"][start_idx:end_idx],
+            "Fext" => result["Fext"][start_idx:end_idx],
+            "CollisionState" => result["CollisionState"][start_idx:end_idx]
+        )
+    end
+    
+    # Create comparison plots for key variables
+    variables = ["x1", "x1dot", "x2", "x2dot", "V", "Qvar", "Fc", "Fd"]
+    titles = ["Shuttle Displacement", "Shuttle Velocity", "Electrode Displacement", 
+              "Electrode Velocity", "Output Voltage", "Charge", "Collision Force", "Damping Force"]
+    units = [L"$\mu$m", L"mm/s", L"$\mu$m", L"mm/s", L"mV", L"pC", L"$\mu$N", L"$\mu$N"]
+    scale_factors = [1e6, 1e3, 1e6, 1e3, 1e3, 1e12, 1e6, 1e6]  # Convert to appropriate units
+    
+    for (var, title, unit, scale) in zip(variables, titles, units, scale_factors)
+        p = plot(
+            size=(800, 600),
+            dpi=600,
+            left_margin=10mm,
+            bottom_margin=10mm,
+            top_margin=5mm,
+            right_margin=5mm,
+            title="Effect of Acceleration on $title",
+            titlelocation=:center,
+            titlefontsize=14,
+            xlabel=L"Time $t$ (s)",
+            ylabel="$title $unit",
+            legend=:topright
+        )
+        
+        # Add a line for each alpha value
+        for alpha in alpha_values
+            data = trimmed_data[alpha]
+            plot!(p, data["time"], data[var] .* scale, 
+                  linewidth=2, 
+                  label=L"\alpha = %$alpha")
+        end
+        
+        savefig(p, joinpath(alpha_dir, "comparison_$(var).pdf"))
+        savefig(p, joinpath(alpha_dir, "comparison_$(var).png"))
+    end
+    
+    # Create RMS voltage vs. alpha plot
+    rms_voltages = Float64[]
+    for alpha in alpha_values
+        data = trimmed_data[alpha]
+        rms_voltage = sqrt(mean(data["V"].^2)) * 1e3  # Convert to mV
+        push!(rms_voltages, rms_voltage)
+    end
+    
+    p_rms = plot(
+        alpha_values, 
+        rms_voltages,
+        linewidth=1.15,
+        marker=:circle,
+        markersize=6,
+        color=:darkorange2,
+        xlabel=L"Acceleration Parameter $\alpha$",
+        ylabel=L"RMS Voltage $V_{rms}$ (mV)",
+        title="RMS Voltage vs. Acceleration",
+        legend=false,
+        dpi=600,
+        size=(800, 600),
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm
+    )
+    
+    savefig(p_rms, joinpath(alpha_dir, "rms_voltage_vs_alpha.pdf"))
+    savefig(p_rms, joinpath(alpha_dir, "rms_voltage_vs_alpha.png"))
+    
+    # Create max displacement vs. alpha plot
+    max_displacements = Float64[]
+    for alpha in alpha_values
+        data = trimmed_data[alpha]
+        max_displacement = maximum(abs.(data["x1"])) * 1e6  # Convert to μm
+        push!(max_displacements, max_displacement)
+    end
+    
+    p_disp = plot(
+        alpha_values, 
+        max_displacements,
+        linewidth=1.15,
+        marker=:circle,
+        markersize=6,
+        color=:royalblue3,
+        xlabel=L"Acceleration Parameter $\alpha$",
+        ylabel=L"Maximum Displacement $x_{1,max}$ ($\mu$m)",
+        title="Maximum Displacement vs. Acceleration",
+        legend=false,
+        dpi=600,
+        size=(800, 600),
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm
+    )
+    
+    savefig(p_disp, joinpath(alpha_dir, "max_displacement_vs_alpha.pdf"))
+    savefig(p_disp, joinpath(alpha_dir, "max_displacement_vs_alpha.png"))
+    
+    # Create summary plot with both RMS voltage and max displacement
+    p_summary = plot(
+        layout=(2,1),
+        size=(800, 800),
+        dpi=600,
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm,
+        plot_title="Effect of Acceleration on MEMS Energy Harvester Performance",
+        plot_titlelocation=:center,
+        plot_titlefontsize=14
+    )
+    
+    plot!(p_summary[1], alpha_values, rms_voltages, linewidth=2.5, marker=:circle, markersize=6, 
+          color=:darkorange2, xlabel="", ylabel=L"RMS Voltage $V_{rms}$ (mV)", 
+          title="RMS Voltage vs. Acceleration", legend=false)
+    
+    plot!(p_summary[2], alpha_values, max_displacements, linewidth=2.5, marker=:circle, markersize=6, 
+          color=:royalblue3, xlabel=L"Acceleration Parameter $\alpha$", 
+          ylabel=L"Maximum Displacement $x_{1,max}$ ($\mu$m)", 
+          title="Maximum Displacement vs. Acceleration", legend=false)
+    
+    savefig(p_summary, joinpath(alpha_dir, "performance_summary.pdf"))
+    savefig(p_summary, joinpath(alpha_dir, "performance_summary.png"))
+end
+
+# Example usage:
+# Define alpha values for the parameter sweep
+alpha_values = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5]
+
+# Generate plots for all alpha values
+all_results = generate_alpha_plots(alpha_values, num_oscillations=4, start_time=0.2, prefix="")
+
+println("All alpha parameter plots created successfully!")
+
+
+
+# --------------------------------------- Optimized Plots for Journal Publication --------------------------------------
+# Automated Journal-Quality Plotting System with Flexible Time Window Selection
+using Plots, LaTeXStrings, Measures, Statistics
+
+# Define high-quality theme for journal publication
+function set_journal_theme()
+    default(
+        fontfamily="Computer Modern",  # LaTeX-like font
+        linewidth=1.15,                 # Thicker lines
+        foreground_color_legend=nothing, # Transparent legend background
+        background_color_legend=nothing, # Transparent legend background
+        legendfontsize=10,             # Legend font size
+        guidefontsize=12,              # Axis label font size
+        tickfontsize=10,               # Tick label font size
+        titlefontsize=14,              # Title font size
+        size=(800, 600),               # Figure size
+        dpi=600,                       # High DPI for print quality
+        grid=false,                    # No grid by default
+        framestyle=:box,               # Box-style frame
+        foreground_color_axis=:black,  # Black axes
+        tick_direction=:out,           # Ticks pointing outward
+        palette=:default               # Color palette
+    )
+end
+
+# Apply the theme
+set_journal_theme()
+
+# Main function to generate plots for different alpha values
+function generate_alpha_plots(alpha_values; 
+                              time_window=:auto,   # Can be :auto or a tuple (start_time, end_time)
+                              num_oscillations=4,  # Used if time_window is :auto
+                              start_time=0.2,      # Default start time if time_window is :auto
+                              prefix="")
+    # Store results for each alpha value
+    all_results = Dict()
+    
+    # Create a directory for alpha comparison plots if it doesn't exist
+    alpha_dir = "alpha_comparison"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Generate and save plots for each alpha value
+    for (i, alpha) in enumerate(alpha_values)
+        println("Processing α = $alpha ($(i)/$(length(alpha_values)))")
+        
+        # Run the simulation with this alpha value
+        result = run_simulation(alpha)
+        
+        # Store the result
+        all_results[alpha] = result
+        
+        # Generate plots for this alpha value
+        generate_plots_for_alpha(result, alpha, time_window, num_oscillations, start_time, prefix)
+    end
+    
+    # Only generate comparison plots if we have more than one alpha value
+    if length(alpha_values) > 1
+        # Generate comparison plots across all alpha values
+        generate_comparison_plots(all_results, alpha_values, time_window, num_oscillations, start_time)
+        
+        # Generate combined grid plot for all alphas
+        generate_combined_grid_plot(all_results, alpha_values, time_window, num_oscillations, start_time)
+    else
+        println("Only one alpha value provided. Skipping comparison plots.")
+    end
+    
+    return all_results
+end
+
+# Function to run a simulation with a given alpha value
+function run_simulation(alpha)
+    # Set to `true` to use sine wave, `false` for displaced IC
+    use_sine = true
+
+    # Set the external force parameters
+    f = 20.0  # Frequency (Hz)
+    g = 9.81  # Gravitational constant (m/s²)
+    A = alpha * g
+    t_ramp = 0.2  # Ramp-up duration (s)
+    
+    # Define Fext_input based on your choice
+    if use_sine
+        Fext_input = t -> A * (t < t_ramp ? t / t_ramp : 1.0) * sin(2 * π * f * t)
+    else
+        Fext_input = t -> 0.0
+    end
+    
+    # Initialize parameters
+    p_new = deepcopy(AnalyticalModel.p)
+    
+    # Initial conditions
+    x10 = 0.0      # Initial displacement
+    x10dot = 0.0   # Initial velocity
+    x20 = 0.0      # Initial displacement
+    x20dot = 0.0   # Initial velocity
+    
+    # Compute initial electrostatic parameters
+    Ctotal0, Fe0 = AnalyticalModel.electrostatic(
+        x10, x20, 0.0, 
+        p_new.g0, p_new.gp, p_new.a, 
+        p_new.e, p_new.ep, p_new.cp, 
+        p_new.wt, p_new.wb, p_new.ke, 
+        p_new.E, p_new.I, p_new.Leff, 
+        p_new.Tf, p_new.Tp, p_new.N
+    )
+    
+    Q0 = p_new.Vbias * Ctotal0  # Initial charge
+    Vout0 = p_new.Vbias - (Q0 / Ctotal0)  # Initial voltage
+    z0 = [x10, x10dot, x20, x20dot, Q0, Vout0]
+    tspan = (0.0, 0.5)  # simulation length
+    abstol = 1e-9  # absolute solver tolerance
+    reltol = 1e-6  # relative solver tolerance
+    
+    # Define the wrapper function for ODE solver
+    function CoupledSystem_wrapper!(dz, z, p, t)
+        current_acceleration = Fext_input(t)
+        AnalyticalModel.CoupledSystem!(dz, z, p, t, current_acceleration)
+    end
+    
+    # Solve the ODE system
+    eqn = ODEProblem(CoupledSystem_wrapper!, z0, tspan, p_new)
+    sol = solve(eqn, Rosenbrock23(); abstol=abstol, reltol=reltol, maxiters=1e7)
+    
+    # Extract results
+    x1 = [u[1] for u in sol.u]      # Shuttle displacement
+    x1dot = [u[2] for u in sol.u]   # Shuttle velocity
+    x2 = [u[3] for u in sol.u]      # Electrode displacement
+    x2dot = [u[4] for u in sol.u]   # Electrode velocity
+    Qvar = [u[5] for u in sol.u]    # Charge
+    V = [u[6] for u in sol.u]       # Output voltage
+    
+    # Initialize arrays to store forces
+    Fs_array = Float64[]  # Suspension spring force
+    Fc_array = Float64[]  # Collision force
+    Fd_array = Float64[]  # Damping force
+    Fe_array = Float64[]  # Electrostatic force
+    CollisionState_array = String[]  # Collision state
+    
+    # Calculate forces at each time point
+    for (i, t) in enumerate(sol.t)
+        # Extract state variables at time t
+        z = sol.u[i]
+        z1, z2, z3, z4, z5, Vout = z
+        
+        # Compute Fs (Suspension spring force)
+        Fs = AnalyticalModel.spring(z1, p_new.k1, p_new.k3, p_new.gss, p_new.kss)
+        push!(Fs_array, Fs)
+        
+        # Compute Fc (Collision force)
+        Fc, collision_state = AnalyticalModel.collision(z1, z3, p_new.m2, p_new.ke, p_new.gp)
+        push!(Fc_array, Fc)
+        push!(CollisionState_array, collision_state)
+        
+        # Compute Fd (Damping force)
+        if collision_state == "translational"
+            Fd = AnalyticalModel.damping(z1, z2, z3, z4, p_new.a, p_new.c, p_new.gp, p_new.Leff, p_new.Tf, p_new.eta, p_new.lambda, p_new.sigmap)
+        else
+            Fd = AnalyticalModel.damping(z1, z2, z3, z2, p_new.a, p_new.c, p_new.gp, p_new.Leff, p_new.Tf, p_new.eta, p_new.lambda, p_new.sigmap)
+        end
+        push!(Fd_array, Fd)
+        
+        # Compute Fe (Electrostatic force)
+        Ctotalx, Fe = AnalyticalModel.electrostatic(
+            z1, z3, z5, p_new.g0, p_new.gp, p_new.a, 
+            p_new.e, p_new.ep, p_new.cp, p_new.wt, 
+            p_new.wb, p_new.ke, p_new.E, p_new.I, 
+            p_new.Leff, p_new.Tf, p_new.Tp, p_new.N
+        )
+        push!(Fe_array, Fe)
+    end
+    
+    # Return the simulation results as a dictionary
+    return Dict(
+        "time" => sol.t,
+        "x1" => x1,
+        "x1dot" => x1dot,
+        "x2" => x2,
+        "x2dot" => x2dot,
+        "Qvar" => Qvar,
+        "V" => V,
+        "Fs" => Fs_array,
+        "Fc" => Fc_array,
+        "Fd" => Fd_array,
+        "Fe" => Fe_array,
+        "CollisionState" => CollisionState_array,
+        "Fext" => [Fext_input(t) for t in sol.t],
+        "alpha" => alpha,
+        "frequency" => f
+    )
+end
+
+# Function to determine time window based on user preferences
+function determine_time_window(result, time_window, num_oscillations, start_time)
+    if time_window == :auto
+        # Calculate time window based on frequency and desired number of oscillations
+        f = result["frequency"]
+        period = 1.0 / f
+        end_time = start_time + num_oscillations * period
+        println("Using frequency-based time window: $(start_time) to $(round(end_time, digits=4)) seconds ($(num_oscillations) oscillations)")
+    else
+        # Use explicit time window
+        start_time, end_time = time_window
+        f = result["frequency"]
+        period = 1.0 / f
+        num_oscillations = (end_time - start_time) / period
+        println("Using explicit time window: $(start_time) to $(end_time) seconds (approximately $(round(num_oscillations, digits=2)) oscillations)")
+    end
+    
+    return start_time, end_time
+end
+
+# Function to generate plots for a single alpha value
+function generate_plots_for_alpha(result, alpha, time_window, num_oscillations, start_time, prefix)
+    # Determine the time window
+    start_time, end_time = determine_time_window(result, time_window, num_oscillations, start_time)
+    
+    # Find indices for the specified time window
+    time = result["time"]
+    start_idx = findfirst(t -> t >= start_time, time)
+    end_idx = findfirst(t -> t >= end_time, time)
+    
+    if start_idx === nothing
+        start_idx = 1
+    end
+    if end_idx === nothing
+        end_idx = length(time)
+    end
+    
+    # Extract data for the specified time window
+    plot_time = time[start_idx:end_idx]
+    plot_x1 = result["x1"][start_idx:end_idx]
+    plot_x1dot = result["x1dot"][start_idx:end_idx]
+    plot_x2 = result["x2"][start_idx:end_idx]
+    plot_x2dot = result["x2dot"][start_idx:end_idx]
+    plot_Qvar = result["Qvar"][start_idx:end_idx]
+    plot_V = result["V"][start_idx:end_idx]
+    plot_Fs = result["Fs"][start_idx:end_idx]
+    plot_Fc = result["Fc"][start_idx:end_idx]
+    plot_Fd = result["Fd"][start_idx:end_idx]
+    plot_Fe = result["Fe"][start_idx:end_idx]
+    plot_Fext = result["Fext"][start_idx:end_idx]
+    plot_collision_state = result["CollisionState"][start_idx:end_idx]
+    plot_collision_numeric = [s == "translational" ? 0 : 1 for s in plot_collision_state]
+    
+    # Directory for this alpha value
+    alpha_dir = "alpha_$(alpha)"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Create a combined state variables plot (2x3) with updated layout
+    p_states = plot(
+        layout=(2,3),
+        size=(1200, 800),
+        dpi=600,
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm,
+        plot_title="MEMS Energy Harvester: State Variables (α = $alpha)",
+        plot_titlelocation=:center,
+        plot_titlefontsize=14
+    )
+
+    # Add each state variable to the combined plot with the new layout
+    plot!(p_states[1], plot_time, plot_x1 .* 1e6, linewidth=2, color=:royalblue3, 
+          xlabel="", ylabel=L"$x_1$ ($\mu$m)", title="Shuttle Displacement", legend=false)
+          
+    plot!(p_states[2], plot_time, plot_x1dot .* 1e3, linewidth=2, color=:firebrick3, 
+          xlabel="", ylabel=L"$\dot{x}_1$ (mm/s)", title="Shuttle Velocity", legend=false)
+          
+    plot!(p_states[3], plot_time, plot_x2 .* 1e6, linewidth=2, color=:green4, 
+          xlabel="", ylabel=L"$x_2$ ($\mu$m)", title="Electrode Displacement", legend=false)
+          
+    plot!(p_states[4], plot_time, plot_x2dot .* 1e3, linewidth=2, color=:purple3, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$\dot{x}_2$ (mm/s)", title="Electrode Velocity", legend=false)
+          
+    plot!(p_states[5], plot_time, plot_Qvar .* 1e12, linewidth=2, color=:darkorange, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$Q_{var}$ (pC)", title="Charge", legend=false)
+          
+    plot!(p_states[6], plot_time, plot_V .* 1e3, linewidth=2, color=:darkorange2, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$V_{out}$ (mV)", title="Output Voltage", legend=false)
+
+    savefig(p_states, joinpath(alpha_dir, "$(prefix)combined_states_alpha_$(alpha).pdf"))
+    savefig(p_states, joinpath(alpha_dir, "$(prefix)combined_states_alpha_$(alpha).png"))
+
+    # Create a combined forces plot (2x3)
+    p_forces = plot(
+        layout=(2,3),
+        size=(1200, 800),
+        dpi=600,
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm,
+        plot_title="MEMS Energy Harvester: Forces (α = $alpha)",
+        plot_titlelocation=:center,
+        plot_titlefontsize=14
+    )
+
+    # Add each force to the combined plot
+    plot!(p_forces[1], plot_time, plot_Fs .* 1e6, linewidth=2, color=:royalblue3, 
+          xlabel="", ylabel=L"$F_s$ ($\mu$N)", title="Spring Force", legend=false)
+          
+    plot!(p_forces[2], plot_time, plot_Fc .* 1e6, linewidth=2, color=:firebrick3, 
+          xlabel="", ylabel=L"$F_c$ ($\mu$N)", title="Collision Force", legend=false)
+          
+    plot!(p_forces[3], plot_time, plot_Fd .* 1e6, linewidth=2, color=:green4, 
+          xlabel="", ylabel=L"$F_d$ ($\mu$N)", title="Damping Force", legend=false)
+          
+    plot!(p_forces[4], plot_time, plot_Fe .* 1e6, linewidth=2, color=:purple3, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$F_e$ ($\mu$N)", title="Electrostatic Force", legend=false)
+          
+    plot!(p_forces[5], plot_time, plot_Fext .* 1e6, linewidth=2, color=:darkorange2, 
+          xlabel=L"Time $t$ (s)", ylabel=L"$F_{ext}$ ($\mu$N)", title="External Force", legend=false)
+          
+    plot!(p_forces[6], plot_time, plot_collision_numeric, linewidth=2, color=:black, 
+          xlabel=L"Time $t$ (s)", ylabel="State", yticks=([0, 1], ["Trans.", "Rot."]), 
+          title="Collision State", legend=false)
+
+    savefig(p_forces, joinpath(alpha_dir, "$(prefix)combined_forces_alpha_$(alpha).pdf"))
+    savefig(p_forces, joinpath(alpha_dir, "$(prefix)combined_forces_alpha_$(alpha).png"))
+
+    # Create a comprehensive figure for the paper with just 4 key plots
+    p_paper = plot(
+        layout=(2,2),
+        size=(1200, 1000),
+        dpi=600,
+        left_margin=12mm,
+        bottom_margin=12mm,
+        top_margin=8mm,
+        right_margin=8mm,
+        plot_title="MEMS Electrostatic Energy Harvester Dynamics (α = $alpha)",
+        plot_titlelocation=:center,
+        plot_titlefontsize=16
+    )
+
+    # Add key plots: Displacements, Voltage, Collision Force, and Damping Force
+    plot!(p_paper[1], plot_time, plot_x1 .* 1e6, linewidth=2.5, color=:royalblue3, 
+          xlabel="", ylabel=L"Displacement ($\mu$m)", title="Shuttle and Electrode Displacement", 
+          label=L"$x_1$ (Shuttle)")
+    plot!(p_paper[1], plot_time, plot_x2 .* 1e6, linewidth=2.5, color=:green4, 
+          linestyle=:dash, label=L"$x_2$ (Electrode)")
+          
+    plot!(p_paper[2], plot_time, plot_V .* 1e3, linewidth=2.5, color=:darkorange2, 
+          xlabel="", ylabel=L"Voltage $V_{out}$ (mV)", title="Output Voltage", legend=false)
+          
+    plot!(p_paper[3], plot_time, plot_Fc .* 1e6, linewidth=2.5, color=:firebrick3, 
+          xlabel=L"Time $t$ (s)", ylabel=L"Force $F_c$ ($\mu$N)", title="Collision Force", legend=false)
+          
+    plot!(p_paper[4], plot_time, plot_Fd .* 1e6, linewidth=2.5, color=:green4, 
+          xlabel=L"Time $t$ (s)", ylabel=L"Force $F_d$ ($\mu$N)", title="Damping Force", legend=false)
+
+    savefig(p_paper, joinpath(alpha_dir, "$(prefix)paper_figure_alpha_$(alpha).pdf"))
+    savefig(p_paper, joinpath(alpha_dir, "$(prefix)paper_figure_alpha_$(alpha).png"))
+    
+    return Dict(
+        "states_plot" => p_states,
+        "forces_plot" => p_forces,
+        "paper_plot" => p_paper,
+        "plot_data" => Dict(
+            "time" => plot_time,
+            "x1" => plot_x1,
+            "x1dot" => plot_x1dot,
+            "x2" => plot_x2,
+            "x2dot" => plot_x2dot,
+            "Qvar" => plot_Qvar,
+            "V" => plot_V,
+            "Fs" => plot_Fs,
+            "Fc" => plot_Fc,
+            "Fd" => plot_Fd,
+            "Fe" => plot_Fe,
+            "Fext" => plot_Fext,
+            "CollisionState" => plot_collision_numeric
+        )
+    )
+end
+
+# Function to generate comparison plots across all alpha values
+function generate_comparison_plots(all_results, alpha_values, time_window, num_oscillations, start_time)
+    # Check if we have enough alpha values for comparisons
+    if length(alpha_values) < 2
+        println("Need at least 2 alpha values for comparison plots. Skipping.")
+        return Dict()
+    end
+    
+    # Create a directory for alpha comparison if it doesn't exist
+    alpha_dir = "alpha_comparison"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Store trimmed data for all alpha values
+    trimmed_data = Dict()
+    
+    # Process each alpha value to get the time window and extract data
+    for alpha in alpha_values
+        result = all_results[alpha]
+        
+        # Determine the time window
+        start_t, end_t = determine_time_window(result, time_window, num_oscillations, start_time)
+        
+        # Find indices for the specified time window
+        time = result["time"]
+        start_idx = findfirst(t -> t >= start_t, time)
+        end_idx = findfirst(t -> t >= end_t, time)
+        
+        if start_idx === nothing
+            start_idx = 1
+        end
+        if end_idx === nothing
+            end_idx = length(time)
+        end
+        
+        # Extract and store the trimmed data
+        trimmed_data[alpha] = Dict(
+            "time" => time[start_idx:end_idx],
+            "x1" => result["x1"][start_idx:end_idx],
+            "x1dot" => result["x1dot"][start_idx:end_idx],
+            "x2" => result["x2"][start_idx:end_idx],
+            "x2dot" => result["x2dot"][start_idx:end_idx],
+            "Qvar" => result["Qvar"][start_idx:end_idx],
+            "V" => result["V"][start_idx:end_idx],
+            "Fs" => result["Fs"][start_idx:end_idx],
+            "Fc" => result["Fc"][start_idx:end_idx],
+            "Fd" => result["Fd"][start_idx:end_idx],
+            "Fe" => result["Fe"][start_idx:end_idx],
+            "Fext" => result["Fext"][start_idx:end_idx],
+            "CollisionState" => result["CollisionState"][start_idx:end_idx]
+        )
+    end
+    
+    # Create comparison plots for key variables
+    variables = ["x1", "x1dot", "x2", "x2dot", "V", "Qvar", "Fc", "Fd"]
+    titles = ["Shuttle Displacement", "Shuttle Velocity", "Electrode Displacement", 
+              "Electrode Velocity", "Output Voltage", "Charge", "Collision Force", "Damping Force"]
+    units = [L"$\mu$m", L"mm/s", L"$\mu$m", L"mm/s", L"mV", L"pC", L"$\mu$N", L"$\mu$N"]
+    scale_factors = [1e6, 1e3, 1e6, 1e3, 1e3, 1e12, 1e6, 1e6]  # Convert to appropriate units
+    
+    for (var, title, unit, scale) in zip(variables, titles, units, scale_factors)
+        p = plot(
+            size=(800, 600),
+            dpi=600,
+            left_margin=10mm,
+            bottom_margin=10mm,
+            top_margin=5mm,
+            right_margin=5mm,
+            title="Effect of Acceleration on $title",
+            titlelocation=:center,
+            titlefontsize=14,
+            xlabel=L"Time $t$ (s)",
+            ylabel="$title $unit",
+            legend=:topright
+        )
+        
+        # Add a line for each alpha value
+        for alpha in alpha_values
+            data = trimmed_data[alpha]
+            plot!(p, data["time"], data[var] .* scale, 
+                  linewidth=2, 
+                  label=L"\alpha = %$alpha")
+        end
+        
+        savefig(p, joinpath(alpha_dir, "comparison_$(var).pdf"))
+        savefig(p, joinpath(alpha_dir, "comparison_$(var).png"))
+    end
+    
+    # Create RMS voltage vs. alpha plot
+    rms_voltages = Float64[]
+    for alpha in alpha_values
+        data = trimmed_data[alpha]
+        rms_voltage = sqrt(mean(data["V"].^2)) * 1e3  # Convert to mV
+        push!(rms_voltages, rms_voltage)
+    end
+    
+    p_rms = plot(
+        alpha_values, 
+        rms_voltages,
+        linewidth=1.15,
+        marker=:circle,
+        markersize=6,
+        color=:darkorange2,
+        xlabel=L"Acceleration Parameter $\alpha$",
+        ylabel=L"RMS Voltage $V_{rms}$ (mV)",
+        title="RMS Voltage vs. Acceleration",
+        legend=false,
+        dpi=600,
+        size=(800, 600),
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm
+    )
+    
+    savefig(p_rms, joinpath(alpha_dir, "rms_voltage_vs_alpha.pdf"))
+    savefig(p_rms, joinpath(alpha_dir, "rms_voltage_vs_alpha.png"))
+    
+    # Create max displacement vs. alpha plot
+    max_displacements = Float64[]
+    for alpha in alpha_values
+        data = trimmed_data[alpha]
+        max_displacement = maximum(abs.(data["x1"])) * 1e6  # Convert to μm
+        push!(max_displacements, max_displacement)
+    end
+    
+    p_disp = plot(
+        alpha_values, 
+        max_displacements,
+        linewidth=1.15,
+        marker=:circle,
+        markersize=6,
+        color=:royalblue3,
+        xlabel=L"Acceleration Parameter $\alpha$",
+        ylabel=L"Maximum Displacement $x_{1,max}$ ($\mu$m)",
+        title="Maximum Displacement vs. Acceleration",
+        legend=false,
+        dpi=600,
+        size=(800, 600),
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm
+    )
+    
+    savefig(p_disp, joinpath(alpha_dir, "max_displacement_vs_alpha.pdf"))
+    savefig(p_disp, joinpath(alpha_dir, "max_displacement_vs_alpha.png"))
+    
+    # Create summary plot with both RMS voltage and max displacement
+    p_summary = plot(
+        layout=(2,1),
+        size=(800, 800),
+        dpi=600,
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm,
+        plot_title="Effect of Acceleration on MEMS Energy Harvester Performance",
+        plot_titlelocation=:center,
+        plot_titlefontsize=14
+    )
+    
+    plot!(p_summary[1], alpha_values, rms_voltages, linewidth=2.5, marker=:circle, markersize=6, 
+          color=:darkorange2, xlabel="", ylabel=L"RMS Voltage $V_{rms}$ (mV)", 
+          title="RMS Voltage vs. Acceleration", legend=false)
+    
+    plot!(p_summary[2], alpha_values, max_displacements, linewidth=2.5, marker=:circle, markersize=6, 
+          color=:royalblue3, xlabel=L"Acceleration Parameter $\alpha$", 
+          ylabel=L"Maximum Displacement $x_{1,max}$ ($\mu$m)", 
+          title="Maximum Displacement vs. Acceleration", legend=false)
+    
+    savefig(p_summary, joinpath(alpha_dir, "performance_summary.pdf"))
+    savefig(p_summary, joinpath(alpha_dir, "performance_summary.png"))
+    
+    return trimmed_data
+end
+
+# Function to generate a combined grid plot showing all alphas together on each state variable subplot
+function generate_combined_grid_plot(all_results, alpha_values, time_window, num_oscillations, start_time)
+    # Check if we have enough alpha values for comparison
+    if length(alpha_values) < 2
+        println("Need at least 2 alpha values for comparison plots. Skipping.")
+        return
+    end
+    
+    # Create a directory for alpha comparison if it doesn't exist
+    alpha_dir = "alpha_comparison"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Store trimmed data for all alpha values
+    trimmed_data = Dict()
+    
+    # Process each alpha value to get the time window and extract data
+    for alpha in alpha_values
+        result = all_results[alpha]
+        
+        # Determine the time window
+        start_t, end_t = determine_time_window(result, time_window, num_oscillations, start_time)
+        
+        # Find indices for the specified time window
+        time = result["time"]
+        start_idx = findfirst(t -> t >= start_t, time)
+        end_idx = findfirst(t -> t >= end_t, time)
+        
+        if start_idx === nothing
+            start_idx = 1
+        end
+        if end_idx === nothing
+            end_idx = length(time)
+        end
+        
+        # Extract and store the trimmed data
+        trimmed_data[alpha] = Dict(
+            "time" => time[start_idx:end_idx],
+            "x1" => result["x1"][start_idx:end_idx],
+            "x1dot" => result["x1dot"][start_idx:end_idx],
+            "x2" => result["x2"][start_idx:end_idx],
+            "x2dot" => result["x2dot"][start_idx:end_idx],
+            "Qvar" => result["Qvar"][start_idx:end_idx],
+            "V" => result["V"][start_idx:end_idx]
+        )
+    end
+    
+    # Define variables for the grid plot
+    variables = ["x1", "x1dot", "x2", "x2dot", "Qvar", "V"]
+    titles = ["Shuttle Displacement", "Shuttle Velocity", "Electrode Displacement", 
+              "Electrode Velocity", "Charge", "Output Voltage"]
+    units = [L"$\mu$m", L"mm/s", L"$\mu$m", L"mm/s", L"pC", L"mV"]
+    scale_factors = [1e6, 1e3, 1e6, 1e3, 1e12, 1e3]  # Convert to appropriate units
+    
+    # Create a 2×3 grid where each subplot shows all alpha values
+    combined_plot = plot(
+        layout=(2, 3),
+        size=(1200, 800),
+        dpi=600,
+        left_margin=10mm,
+        bottom_margin=10mm,
+        top_margin=5mm,
+        right_margin=5mm,
+        plot_titlelocation=:center,
+        plot_titlefontsize=16
+    )
+    
+    # For each state variable (subplot position), plot all alpha values
+    for (i, (var, title, unit, scale)) in enumerate(zip(variables, titles, units, scale_factors))
+        # Create a subplot for this state variable
+        subplot_idx = i
+        
+        # Initialize the subplot
+        plot!(
+            combined_plot[subplot_idx],
+            xlabel=(i > 3) ? L"Time $t$ (s)" : "",  # Only show x-label for bottom row
+            ylabel="$title $unit",
+            title=title,
+            legend=(i == 1) ? :topright : false,  # Only show legend in first subplot
+            framestyle=:box,
+            grid=false
+        )
+        
+        # Plot each alpha value as a separate line on this subplot
+        for (j, alpha) in enumerate(alpha_values)
+            data = trimmed_data[alpha]
+            
+            plot!(
+                combined_plot[subplot_idx],
+                data["time"],
+                data[var] .* scale,
+                linewidth=1,
+                label=(i == 1) ? L"\gamma = %$alpha" : "",  # Only add labels in first subplot
+                color=j  # Use different colors for different alpha values
+            )
+        end
+    end
+    
+    # Save the combined grid plot
+    savefig(combined_plot, joinpath(alpha_dir, "combined_state_comparison_grid.pdf"))
+    savefig(combined_plot, joinpath(alpha_dir, "combined_state_comparison_grid.png"))
+    
+    # Create a separate set of individual state plots (one plot per state variable, all alphas)
+    for (i, (var, title, unit, scale)) in enumerate(zip(variables, titles, units, scale_factors))
+        p_var = plot(
+            size=(800, 600),
+            dpi=600,
+            left_margin=10mm,
+            bottom_margin=10mm,
+            top_margin=5mm,
+            right_margin=5mm,
+            title="Effect of Acceleration on $title",
+            xlabel=L"Time $t$ (s)",
+            ylabel="$title $unit",
+            legend=:topright,
+            framestyle=:box,
+            grid=false
+        )
+        
+        # Plot each alpha value
+        for (j, alpha) in enumerate(alpha_values)
+            data = trimmed_data[alpha]
+            
+            plot!(
+                p_var,
+                data["time"],
+                data[var] .* scale,
+                linewidth=1,
+                label=L"\gamma = %$alpha",
+                color=j
+            )
+        end
+        
+        # Save this individual comparison plot
+        savefig(p_var, joinpath(alpha_dir, "comparison_$(var)_overlay.pdf"))
+        savefig(p_var, joinpath(alpha_dir, "comparison_$(var)_overlay.png"))
+    end
+end
+
+# Function to create a special plot with voltage and external force overlay
+function plot_voltage_with_force(result, alpha, time_range=(0.275, 0.327); prefix="")
+    # Create directory for this alpha value if it doesn't exist
+    alpha_dir = "alpha_$(alpha)"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Extract the time range
+    time = result["time"]
+    start_time, end_time = time_range
+    
+    # Find indices for the specified time window
+    start_idx = findfirst(t -> t >= start_time, time)
+    end_idx = findfirst(t -> t >= end_time, time)
+    
+    if start_idx === nothing
+        start_idx = 1
+    end
+    if end_idx === nothing
+        end_idx = length(time)
+    end
+    
+    # Extract data for the specified time window
+    plot_time = time[start_idx:end_idx]
+    plot_V = result["V"][start_idx:end_idx]
+    plot_Fext = result["Fext"][start_idx:end_idx]
+    
+    # Create plot
+    p_voltage_force = plot(
+        size=(900, 600),
+        dpi=600,
+        left_margin=15mm,
+        bottom_margin=10mm,
+        top_margin=10mm,
+        right_margin=10mm,
+        titlefontsize=14,
+        titlelocation=:center
+    )
+    
+    # Plot the voltage on the primary y-axis
+    plot!(
+        p_voltage_force,
+        plot_time,
+        plot_V .* 1e3,  # Convert to mV
+        linewidth=2.5,
+        color=:royalblue3,
+        xlabel=L"Time $t$ (s)",
+        ylabel=L"Output Voltage, $V_{\rm out}$ (mV)",
+        label="Voltage",
+        framestyle=:box,
+        legend=:topright,
+        grid=false
+    )
+    
+    # Calculate a scaling factor for the external force to fit it within the voltage range
+    # This ensures the force plot is visible but doesn't dominate
+    v_range = maximum(plot_V .* 1e3) - minimum(plot_V .* 1e3)
+    f_range = maximum(plot_Fext) - minimum(plot_Fext)
+    f_scale = v_range / f_range * 0.6  # Scale to ~60% of voltage range
+    
+    # Add the external force as a dashed line - no right y-axis
+    # Use broadcasting (.+) when combining scalar and vector
+    plot!(
+        p_voltage_force,
+        plot_time,
+        minimum(plot_V .* 1e3) .+ (plot_Fext .- minimum(plot_Fext)) .* f_scale,  # Fix: added dot for broadcasting
+        linewidth=2.5,
+        linestyle=:dash,
+        color=:black,
+        label="External Force",
+        grid=false
+    )
+    
+    # Save the plot
+    savefig(p_voltage_force, joinpath(alpha_dir, "$(prefix)voltage_with_force_alpha_$(alpha).pdf"))
+    savefig(p_voltage_force, joinpath(alpha_dir, "$(prefix)voltage_with_force_alpha_$(alpha).png"))
+    
+    return p_voltage_force
+end
+
+# Function to plot relative displacement (x1-x2) for multiple alpha values
+function plot_relative_displacement(all_results, alpha_values, time_range=(0.2, 0.45); prefix="")
+    # Create directory for alpha comparison if it doesn't exist
+    alpha_dir = "alpha_comparison"
+    if !isdir(alpha_dir)
+        mkdir(alpha_dir)
+    end
+    
+    # Initialize the plot
+    p_rel_disp = plot(
+        size=(900, 600),
+        dpi=600,
+        left_margin=15mm,
+        bottom_margin=10mm,
+        top_margin=10mm,
+        right_margin=10mm,
+        titlefontsize=14,
+        titlelocation=:center,
+        xlabel=L"Time $t$ (s)",
+        ylabel=L"Relative Displacement, $x_1 - x_2$ ($\mu$m)",
+        legend=:topright,
+        framestyle=:box,
+        grid=false
+    )
+    
+    # Process each alpha value
+    for (i, alpha) in enumerate(alpha_values)
+        result = all_results[alpha]
+        time = result["time"]
+        start_time, end_time = time_range
+        
+        # Find indices for the specified time window
+        start_idx = findfirst(t -> t >= start_time, time)
+        end_idx = findfirst(t -> t >= end_time, time)
+        
+        if start_idx === nothing
+            start_idx = 1
+        end
+        if end_idx === nothing
+            end_idx = length(time)
+        end
+        
+        # Extract data for the specified time window
+        plot_time = time[start_idx:end_idx]
+        plot_x1 = result["x1"][start_idx:end_idx]
+        plot_x2 = result["x2"][start_idx:end_idx]
+        
+        # Calculate relative displacement and convert to μm
+        rel_disp = (plot_x1 .- plot_x2) .* 1e6
+        
+        # Plot with different color/style for each alpha
+        plot!(
+            p_rel_disp,
+            plot_time,
+            rel_disp,
+            linewidth=2.5,
+            color=i,  # Different color for each alpha
+            label=L"\gamma = %$alpha",
+            grid=false
+        )
+    end
+    
+    # Add a horizontal line at zero to show when shuttle and electrode are at the same position
+    hline!(
+        p_rel_disp,
+        [0],
+        linestyle=:dash,
+        color=:black,
+        alpha=0.5,
+        linewidth=1.5,
+        label=""
+    )
+    
+    # Save the plot
+    savefig(p_rel_disp, joinpath(alpha_dir, "$(prefix)relative_displacement_comparison.pdf"))
+    savefig(p_rel_disp, joinpath(alpha_dir, "$(prefix)relative_displacement_comparison.png"))
+    
+    # Create an alternative version with normalized time (showing phase differences more clearly)
+    p_rel_disp_norm = plot(
+        size=(900, 600),
+        dpi=600,
+        left_margin=15mm,
+        bottom_margin=10mm,
+        top_margin=10mm,
+        right_margin=10mm,
+        titlefontsize=14,
+        titlelocation=:center,
+        xlabel=L"Normalized Time $t/T$",
+        ylabel=L"Relative Displacement $x_1 - x_2$ ($\mu$m)",
+        legend=:topright,
+        framestyle=:box,
+        grid=false
+    )
+    
+    # Assume the frequency is the same for all alpha values (get from first result)
+    base_freq = all_results[alpha_values[1]]["frequency"]
+    period = 1.0 / base_freq
+    
+    # Process each alpha value again for normalized time plot
+    for (i, alpha) in enumerate(alpha_values)
+        result = all_results[alpha]
+        time = result["time"]
+        start_time, end_time = time_range
+        
+        # Find indices for the specified time window
+        start_idx = findfirst(t -> t >= start_time, time)
+        end_idx = findfirst(t -> t >= end_time, time)
+        
+        if start_idx === nothing
+            start_idx = 1
+        end
+        if end_idx === nothing
+            end_idx = length(time)
+        end
+        
+        # Extract data for the specified time window
+        plot_time = time[start_idx:end_idx]
+        plot_x1 = result["x1"][start_idx:end_idx]
+        plot_x2 = result["x2"][start_idx:end_idx]
+        
+        # Calculate relative displacement and convert to μm
+        rel_disp = (plot_x1 .- plot_x2) .* 1e6
+        
+        # Normalize time by dividing by the period
+        norm_time = (plot_time .- plot_time[1]) ./ period
+        
+        # Only keep data for a few complete cycles for clarity
+        max_cycles = 4
+        cycle_indices = findall(t -> t <= max_cycles, norm_time)
+        
+        if !isempty(cycle_indices)
+            norm_time = norm_time[cycle_indices]
+            rel_disp = rel_disp[cycle_indices]
+            
+            # Plot with different color/style for each alpha
+            plot!(
+                p_rel_disp_norm,
+                norm_time,
+                rel_disp,
+                linewidth=1.15,
+                color=i,  # Different color for each alpha
+                label=L"\alpha = %$alpha",
+                grid=false
+            )
+        end
+    end
+    
+    # Add a horizontal line at zero
+    hline!(
+        p_rel_disp_norm,
+        [0],
+        linestyle=:dash,
+        color=:black,
+        alpha=0.5,
+        linewidth=1.15,
+        label=""
+    )
+    
+    # Save the normalized time plot
+    savefig(p_rel_disp_norm, joinpath(alpha_dir, "$(prefix)relative_displacement_normalized_time.pdf"))
+    savefig(p_rel_disp_norm, joinpath(alpha_dir, "$(prefix)relative_displacement_normalized_time.png"))
+    
+    return p_rel_disp, p_rel_disp_norm
+end
+
+p_rel, p_rel_norm = plot_relative_displacement(all_results, alpha_values, (0.275, 0.327))
+
+alpha = 3.25
+result = all_results[alpha]
+plot_voltage_with_force(result, alpha, (0.275, 0.327), prefix="special_")
+
+# Option 1: Frequency-based time window (auto-calculated based on number of oscillations)
+alpha_values = [3.25]
+# Option 1: Frequency-based time window (auto-calculated based on number of oscillations)
+# all_results = generate_alpha_plots(alpha_values, time_window=:auto, num_oscillations=2, start_time=0.275)
+# Option 2: Explicit time window (directly specify start and end times)
+all_results = generate_alpha_plots(alpha_values, time_window=(0.275, 0.327), prefix="fixed_")      

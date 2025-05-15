@@ -85,6 +85,7 @@ function collision(x1, x2, m2, ke, gp)
     return m2, Fc
 end
 
+
 # Viscous damping, Fd
 function damping2(x2, x2dot, a, c, gp, Leff, Tf, eta)  
     # Damping LHS

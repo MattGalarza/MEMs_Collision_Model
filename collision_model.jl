@@ -47,7 +47,6 @@ export Params, p, electrostatic, CoupledSystem!
     m2::T = :($((33 / 140) * rho * Tf * Lff * wavg))  # Mass of electrode (kg)
     ke::T = :($((1 / 4) * E / Lff^3 * I))          # Electrode spring constant (N/m)
 end
-
 function Params{T}(p::Params{S}) where {T<:Real, S<:Real}
     # Extract field names
     fnames = fieldnames(typeof(p))

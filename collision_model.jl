@@ -48,6 +48,7 @@ export Params, p, electrostatic, CoupledSystem!
     ke::T = :($((1 / 4) * E / Lff^3 * I))          # Electrode spring constant (N/m)
 end
 
+
 function Params{T}(p::Params{S}) where {T<:Real, S<:Real}
     # Extract field names
     fnames = fieldnames(typeof(p))
@@ -86,7 +87,7 @@ function collision(x1, x2, m2, ke, gp)
 end
 
 # Viscous damping, Fd
-function damping(x2, x2dot, a, c, gp, Leff, Tf, eta)  
+function damping2(x2, x2dot, a, c, gp, Leff, Tf, eta)  
     # Damping LHS
     ul = gp + x2
     ll = ul + a * Leff
@@ -110,22 +111,49 @@ function damping(x2, x2dot, a, c, gp, Leff, Tf, eta)
     return Fd
 end
 
-function damping2(x2, x2dot, a, c, gp, Leff, Tf, eta)  
-    # Damping for left side (LHS)
-    Fd_l = (12 * eta * Tf * x2dot / a^4) * (
-        (2 * a * Leff) / (2 * (gp + x2) + a * Leff) + 
-        log(abs((gp + x2) / (gp + x2 + a * Leff)))
+function damping(x2, x2dot, a, c, gp, Leff, Tf, eta)  
+    h0_l = gp + x2
+    hL_l = h0_l + a * Leff
+        
+    # Right side 
+    h0_r = gp - x2
+    hL_r = h0_r + a * Leff
+        
+    # Width (thickness in our case)
+    W = Tf
+        
+    # Calculate integration constants from equations (7) and (8)
+    # Left side constants (simplified for ωa = ωb = 0)
+    C1_l = (h0_l/(12*eta*a^3*Leff*(h0_l + 2*a))) * (a*Leff*12*eta*x2dot)
+    C2_l = (1/(a^4*Leff*(2*h0_l + a*Leff))) * (a*Leff*12*eta*x2dot)
+        
+        # Right side constants (simplified for ωa = ωb = 0, with opposite velocity)
+    C1_r = (h0_r/(12*eta*a^3*Leff*(h0_r + 2*a))) * (a*Leff*12*eta*x2dot)
+    C2_r = (1/(a^4*Leff*(2*h0_r + a*Leff))) * (a*Leff*12*eta*x2dot)
+        
+    # Implement the full force equation (9) from Moy paper for left side
+    F_l = W * (
+        Leff * C2_l - 
+        (6 * eta * Leff) / (a * h0_l * hL_l) * C1_l + 
+        # Main α^-4 terms:
+        (6 * eta * Leff) / (a^4 * hL_l) * x2dot + 
+        (6 * eta / a^4) * (2 * a * x2dot) * log(h0_l) -
+        (a * (2 * x2dot)) * log(hL_l)
     )
         
-    # Damping for right side (RHS)
-    Fd_r = (12 * eta * Tf * x2dot / a^4) * (
-        (2 * a * Leff) / (2 * (gp - x2) + a * Leff) + 
-        log(abs((gp - x2) / (gp - x2 + a * Leff)))
+    # Implement the full force equation (9) from Moy paper for right side
+    # Note: same x2dot is used but the effect is opposite due to gap geometry
+    F_r = W * (
+        Leff * C2_r - 
+        (6 * eta * Leff) / (a * h0_r * hL_r) * C1_r + 
+        # Main α^-4 terms:
+        (6 * eta * Leff) / (a^4 * hL_r) * x2dot + 
+        (6 * eta / a^4) * (2 * a * x2dot) * log(h0_r) -
+        (a * (2 * x2dot)) * log(hL_r)
     )
         
-    # Total damping
-    Fd = -c * (Fd_l + Fd_r)
-    return Fd
+    # Total damping force with damping coefficient
+    Fd = -c * (F_l + F_r)
 end
 
 # Electrostatic coupling, Fe
@@ -205,7 +233,7 @@ end
 
 # Sine Wave External Force
 f = 20.0 # Frequency (Hz)
-alpha = 5.5 # Applied acceleration constant
+alpha = 3.0 # Applied acceleration constant
 g = 9.81 # Gravitational constant 
 A = alpha * g
 t_ramp = 0.2 # Ramp-up duration (s)

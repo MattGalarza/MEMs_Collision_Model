@@ -62,6 +62,9 @@ end
 # Initialize a default Params instance
 p = Params{Float64}()
 
+
+
+
 # Suspension spring force, Fsp
 function spring(x1, k1, k3, gss, kss)
     # Fsp = - k1 * x1 - k3 * (x1^3) # Suspension beam force

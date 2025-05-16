@@ -218,7 +218,6 @@ function CoupledSystem!(dz, z, p, t, current_acceleration)
 end
 end
 
-
 # Import the AnalyticalModel module without bringing all exports into Main
 import .AnalyticalModel  
 

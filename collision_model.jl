@@ -15,7 +15,7 @@ export Params, p, electrostatic, CoupledSystem!
 @with_kw mutable struct Params{T<:Real}
     # Fundamental parameters
     m1::T = 2.0933e-6        # Shuttle mass (kg)
-    E::T = 170e9             # Young's modulus (Pa)
+    E::T = 180e9             # Young's modulus (Pa)
     eta::T = 1.849e-5        # Dynamic viscosity of air (Pa·s)
     c::T = 0.015             # Damping scaling factor
     g0::T = 14e-6            # Electrode gap (m)

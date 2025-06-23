@@ -67,7 +67,6 @@ function damping_f(p,x2,v)
     return Fd0*(1-β)+Fd1*β
 end
 
-
 function capacitance(x2,p)
     Crl=(p.e*p.ep*p.Leff*p.Tf)/p.Tp
     if abs(x2)<p.gp

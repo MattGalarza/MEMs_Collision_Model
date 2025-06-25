@@ -4,7 +4,6 @@ using Sundials, ForwardDiff, DifferentialEquations, OrdinaryDiffEq, Plots
 
 # --------------------------------------- Analytical Model ----------------------------------
 
-
 # Define the AnalyticalModel Module
 module AnalyticalModel
 using DifferentialEquations

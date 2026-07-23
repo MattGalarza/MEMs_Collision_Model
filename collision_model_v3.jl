@@ -1,50 +1,4 @@
 # ------------------------------------------ Libraries --------------------------------------
-# collision_model_v3.jl -- the v2 script structure carrying the v3 (physics-complete)
-# model. Same enclosed flow as collision_model_v2.jl: AnalyticalModel module with
-# Params/create_params, individual force functions, CoupledSystem!, forcing-or-IC
-# toggle, solve, then state and force plots.
-#
-# Physics relative to v2 (all numerically verified against the Python twin
-# verify_full_model.py; see corrections memo for provenance):
-#   F1  m2: stray Lf removed (was x2222 too light; electrode is 64.7 kHz, not 3 MHz).
-#   F2  Coupling spring -ke*(x1-x2) is ALWAYS ON; no branch-switched contact force.
-#       Boundary mechanics = unilateral Hunt-Crossley tip compliance (wall force).
-#   F3  Electrostatic force sign corrected: Fe = +(q^2/2C^2) dC/dx2 (attractive).
-#   F4  Capacitance: approach = translational wedge with root gap (gp-|x2|)+h_eff;
-#       contact = wedge ROTATION about the sealed tip, u = |x2|-gp, au = a - u/Leff.
-#       Exactly value-continuous at the seam; slope drops ~89x at contact
-#       (translation -> rotation kinematics). Replaces the empirical Cmin/Cmax ramp.
-#       Face-wrap toward Cmax needs u ~ a*Leff = 21 um; corrected mechanics caps u
-#       at tens of nm, so that regime is dynamically unreachable below gamma~O(100).
-#   F5  Film: slip-corrected conductance G = h^2(h + 6*sigmap*lambda). Approach =
-#       translational squeeze (b = 1.155e-4 N s/m at 50 nm, zeta ~ 1.0); contact =
-#       sealed-pivot rotational Reynolds (b_rot = 1.72e-5 N s/m, bounded pivot
-#       pressure). Both tabulated at build from direct Reynolds quadrature and
-#       C1-blended over the sealing layer |u| < h_eff/2. Replaces the Moy
-#       transcription and the torsion-mirror rotational formula.
-#   F6  c (damping scale) defaults to 1.0 = PHYSICAL film. The UDE discrepancy
-#       model calibrates this later; insertion point is damping()/bside().
-#   F7  Vout is an observable (Vbias - Q/Ct), not a state: 5 states, no stiff
-#       relaxation equation. The plotting section computes it.
-#   F9  (v3.3) Wall activation is C-infinity: d -> softpos(d, epsw), epsw = 0.5 nm.
-#       Diagnosed via sol.stats: nreject = 963k vs naccept = 491k with njacs =
-#       naccept -- the start-point Jacobian (d < 0 side, dFw/dx = 0) goes stale
-#       across every d = 0 crossing, degrading the Rosenbrock step to low order
-#       and pinning dt at ~ns around each of ~840 crossings. The softplus keeps
-#       the Jacobian valid through the crossing. Physical cost: ~4 nN pre-contact
-#       preload (1% of Fe at the floor); energy-ledger impact ~1e-17 J.
-#   F8  h_eff (default 50 nm) is the single contact-gap parameter (residual air
-#       gap at dielectric contact; measurable via the bias-sweep latch threshold).
-#
-# Operational notes (hard-won):
-#   - NEVER attach a ContinuousCallback on |x2|-gp: at engagement the trajectory
-#     skates the seam (thousands of micro-crossings); event root-finding + restart
-#     multiplied cost ~50x. Count crossings in post-processing if needed.
-#   - Engaged runs (alpha >~ 2.45) resolve ~200 kHz contact motion: expect minutes.
-#     Sub-threshold runs are seconds. If the AD Jacobian complains about the film
-#     tables, switch to Rodas5P(autodiff = false).
-#   - Acceptance (Python-verified): alpha = 1.0 / 2.0 / 2.1 -> max|x1| = 6.098 /
-#     11.094 / 11.54 um, no contact. Collision threshold alpha* = 2.45 +- 0.05.
 
 using DifferentialEquations, Plots, Printf
 
@@ -85,6 +39,9 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
 
     # Contact / boundary parameters (v3)
     h_eff::T = 50e-9     # F8: residual contact air gap (single parameter)
+    epsc::T = 2e-9       # v3.5: sealing-transition width for the Fe derivative
+                         # gates (removes the ~0.18 uN Fe JUMP at u = 0 that pinned
+                         # dt at ~1e-13 s; diagnosed by the dt localizer)
     epsw::T = 0.5e-9     # wall engagement width: C-infinity softplus activation
                          # (sub-roughness scale; pre-contact preload ~4 nN << Fe)
     kw::T = 1e6          # Hunt-Crossley wall stiffness (N/m^1.5)
@@ -240,18 +197,22 @@ end
 @inline btrans(h, p) = exp(_horner((log(clamp(h, 1e-9, 4e-5)) - p.FTmu)/p.FTsd, p.FTc))
 @inline brot(au, p)  = exp(_horner((log(clamp(au, p.TRA[1], p.TRA[end])) - p.FRmu)/p.FRsd, p.FRc))
 
-@inline function ctrans(u, p)      # u = penetration toward a wall (neg = separated)
-    h0 = (u < 0 ? -u : 0.0) + p.h_eff
+@inline function ctrans(u, p)      # v3.5: SMOOTH derivative gate over epsc
+    m  = -u
+    h0 = softpos(m, p.epsc) + p.h_eff
+    sm = 0.5*(1 + m/sqrt(m*m + p.epsc*p.epsc))
     C  = (p.e*p.Tf/p.a)*log((h0 + p.a*p.Leff)/h0)
-    dC = u < 0 ? (p.e*p.Tf/p.a)*(1/h0 - 1/(h0 + p.a*p.Leff)) : 0.0
+    dC = (p.e*p.Tf/p.a)*(1/h0 - 1/(h0 + p.a*p.Leff))*sm
     return C, dC
 end
-@inline function crot(u, p)        # F4: wedge rotation about the sealed tip
-    au = p.a - (u > 0 ? u : 0.0)/p.Leff
+@inline function crot(u, p)        # F4 + v3.5 smooth gate (fixes the Fe jump)
+    up = softpos(u, p.epsc)
+    sp = 0.5*(1 + u/sqrt(u*u + p.epsc*p.epsc))
+    au = p.a - up/p.Leff
     au < p.a_min && (au = p.a_min)
     C  = (p.e*p.Tf/au)*log((p.h_eff + au*p.Leff)/p.h_eff)
-    dC = u > 0 ? (p.e*p.Tf/p.Leff)*(log((p.h_eff + au*p.Leff)/p.h_eff)/au^2 -
-                 p.Leff/(au*(p.h_eff + au*p.Leff))) : 0.0
+    dC = (p.e*p.Tf/p.Leff)*(log((p.h_eff + au*p.Leff)/p.h_eff)/au^2 -
+         p.Leff/(au*(p.h_eff + au*p.Leff)))*sp
     return C, dC
 end
 @inline function cap_side(u, p)    # C1 sealing blend over |u| < W
@@ -268,8 +229,8 @@ end
     u <= -p.W && return btrans(-u + p.h_eff, p)
     u >=  p.W && return brot(p.a - u/p.Leff, p)
     x = (u + p.W)/(2*p.W); s = x*x*x*(10 - 15*x + 6*x*x)
-    bt = btrans((u < 0 ? -u : 0.0) + p.h_eff, p)
-    br = brot(p.a - (u > 0 ? u : 0.0)/p.Leff, p)
+    bt = btrans(softpos(-u, p.epsc) + p.h_eff, p)
+    br = brot(p.a - softpos(u, p.epsc)/p.Leff, p)
     return (1 - s)*bt + s*br
 end
 
@@ -292,11 +253,13 @@ function collision(x1, x2, x2dot, p)
     ul = -x2 - p.gp
     dr = softpos(ur, p.epsw)      # ~ur when ur >> epsw; -> 0 like epsw^2/4|ur| far away
     dl = softpos(ul, p.epsw)
-    gr = 1 + p.cw*x2dot           # HC gate: inert at |x2dot| << 20 mm/s; its g = 0
-    gl = 1 - p.cw*x2dot           # kink is known-benign at operating speeds
+    spr = 0.5*(1 + ur/sqrt(ur*ur + p.epsw*p.epsw))   # v3.6: sigma'(d) factors make
+    spl = 0.5*(1 + ul/sqrt(ul*ul + p.epsw*p.epsw))   # Fw = -dV/dx exactly, with V =
+    gr = 1 + p.cw*x2dot                              # (kw/(pw+1))*softpos(d)^(pw+1);
+    gl = 1 - p.cw*x2dot                              # also zeroes the preload identically
     Fw = 0.0
-    gr > 0 && (Fw += -p.kw*dr^p.pw*gr)
-    gl > 0 && (Fw +=  p.kw*dl^p.pw*gl)
+    gr > 0 && (Fw += -p.kw*dr^p.pw*spr*gr)
+    gl > 0 && (Fw +=  p.kw*dl^p.pw*spl*gl)
     collision_state = (ur > 0 || ul > 0) ? "contact" : "translational"
     return Fc, Fw, collision_state
 end
@@ -350,7 +313,7 @@ import .AnalyticalModel
 
 # Sine Wave External Force
 f = 20.0        # Frequency (Hz)
-alpha = 2.1     # Applied acceleration constant; contact threshold alpha* = 2.45 +- 0.05
+alpha = 2.7     # Applied acceleration constant; contact threshold alpha* = 2.45 +- 0.05
 g = 9.81        # Gravitational constant (m/s^2)
 A = alpha*g
 t_ramp = 0.2    # Ramp-up duration (s)
@@ -398,6 +361,7 @@ eqn = ODEProblem(CoupledSystem_wrapper!, z0, tspan, p_new)
 # sol = solve(eqn, Rodas5P(autodiff = false); abstol, reltol, maxiters = Int(1e9))
 sol = solve(eqn, Rodas5P(); abstol = abstol, reltol = reltol, maxiters = Int(1e9))
 
+println(">>> collision_model version v3.6 (gradient-consistent wall; ledger potential matched) <<<")
 println("Type of sol.u: ", typeof(sol.u))
 println("Size of sol.u: ", size(sol.u))
 println("Solver status: ", sol.retcode)
@@ -459,7 +423,7 @@ p12 = plot(sol.t, Fe_array, xlabel = "Time (s)", ylabel = "Fe (N)", title = "Ele
 p13 = plot(sol.t, Fext_input, xlabel = "Time (s)", ylabel = "Fext (m/s^2)", title = "Applied Base Acceleration"); display(p13)
 
 # =========================================================================================
-# ============================== EVALUATION SUITE (v3.2) ==================================
+# ============================== EVALUATION SUITE (v3.6) ==================================
 # =========================================================================================
 # (1) force-function characterization sweeps      (2) two-cycle steady-state zooms
 # (3) composite multi-panels (states / forces)    (4) collision/discontinuity metrics
@@ -777,6 +741,24 @@ else
     @printf("accepted steps      : %d total | near-seam min/med dt = %.1e / %.1e s | far = %.1e / %.1e s\n",
             length(sol.t), minimum(dt_near), sort(dt_near)[div(end,2)+1],
             minimum(dt_far), sort(dt_far)[div(end,2)+1])
+    # nm-resolution localization of the crawl (accepted steps binned by u)
+    us = [abs(0.5*(x2s[i] + x2s[i+1])) - p_new.gp for i in 1:length(dts)]
+    edges = [-1.0, -200e-9, -50e-9, -25e-9, -5e-9, -1e-9, 1e-9, 5e-9, 25e-9, 1.0]
+    println("dt localization by u = |x2|-gp (accepted steps):")
+    for k in 1:(length(edges) - 1)
+        m = [(us[i] > edges[k]) && (us[i] <= edges[k+1]) for i in 1:length(us)]
+        n = count(m); n == 0 && continue
+        dd = sort(dts[m])
+        @printf("  u in (%9.1f, %9.1f] nm : n = %8d  min = %.1e  med = %.1e\n",
+                edges[k]*1e9, edges[k+1]*1e9, n, dd[1], dd[div(end, 2) + 1])
+    end
+    idx = findall(i -> abs(us[i]) < 6e-8, 1:length(us))
+    idx = idx[1:max(1, div(length(idx), 20000)):end]
+    m8 = scatter([us[i]*1e9 for i in idx], [log10(dts[i]) for i in idx];
+                 ms = 1, msw = 0, legend = false, xlabel = "u (nm)",
+                 ylabel = "log10 dt (s)",
+                 title = "Accepted dt vs distance to seam (crawl localization)")
+    display(m8)
 
     # --- energy ledger (global correctness of the blended discontinuity) ---
     function ledger(Wd, p; Fext = Fext_input)
@@ -784,7 +766,7 @@ else
         E = zeros(n); Pn = zeros(n)
         for i in 1:n
             x1_, v1_, x2_, v2_, q_ = Wd.x1[i], Wd.x1dot[i], Wd.x2[i], Wd.x2dot[i], Wd.Q[i]
-            d = max(abs(x2_) - p.gp, 0.0)
+            d = AM.softpos(abs(x2_) - p.gp, p.epsw)   # v3.6: matches wall potential
             KE = 0.5*p.m1*v1_^2 + (p.N/2)*0.5*p.m2*v2_^2
             Vm = 0.5*p.k1*x1_^2 + (0.25/4)*p.k3*x1_^4 +
                  (abs(x1_) > p.gss ? 0.5*p.kss*(abs(x1_) - p.gss)^2 : 0.0) +
@@ -793,8 +775,9 @@ else
             qd = (p.Vbias - q_/Wd.Ct[i])/p.Rload
             Bv = AM.bside(x2_ - p.gp, p) + AM.bside(-x2_ - p.gp, p)
             s_ = sign(x2_)
-            gate = (d > 0) && (1 + p.cw*v2_*s_ > 0)
-            Pw = gate ? (p.N/2)*p.kw*d^p.pw*p.cw*v2_^2 : 0.0
+            spd  = 0.5*(1 + (abs(x2_) - p.gp)/sqrt((abs(x2_) - p.gp)^2 + p.epsw^2))
+            gate = (1 + p.cw*v2_*s_ > 0)
+            Pw = gate ? (p.N/2)*p.kw*d^p.pw*spd*p.cw*v2_^2 : 0.0
             Pn[i] = -Fext(Wd.t[i])*(p.m1*v1_ + (p.N/2)*p.m2*v2_) +
                     p.Vbias*qd - p.Rload*qd^2 - (p.N/2)*p.c*Bv*v2_^2 - p.c1*v1_^2 - Pw
         end
@@ -831,4 +814,38 @@ else
                        title = "Impact-velocity distribution (first episode)")
         display(m7)
     end
+end
+
+
+# =========================== STEP-FLOOR PROBE (opt-in, v3.4) ===========================
+# Six short A/B runs over (0, 216 ms) -- cruise + first tap -- each seconds-to-a-
+# minute. Interpretation: floor gone under Rosenbrock23/FBDF but not noAD =>
+# high-order estimator vs d^(3/2) temporal regularity at d ~ 0; gone under
+# "quadratic wall" => the 3/2 power law itself (legitimately replaceable: line
+# contact is not Hertz-3/2 anyway); gone only with kw = 0 => wall pathway confirmed
+# but activation-independent; gone under noAD => AD after all, mechanism revised.
+run_probe = false
+if run_probe
+    function probe_run(tag; alg = Rodas5P(), pmod! = identity)
+        pp = deepcopy(AnalyticalModel.p); pmod!(pp)
+        Ct0p, _ = AnalyticalModel.electrostatic(0.0, 0.0, 0.0, pp)
+        zz = [0.0, 0.0, 0.0, 0.0, pp.Vbias*Ct0p]
+        pr = ODEProblem(CoupledSystem_wrapper!, zz, (0.0, 0.2160), pp)
+        ss = solve(pr, alg; abstol = abstol, reltol = reltol, maxiters = Int(1e9))
+        dts_ = diff(ss.t); x2_ = [u[3] for u in ss.u]
+        ns_ = [abs(abs(0.5*(x2_[i] + x2_[i+1])) - pp.gp) < 5*pp.W for i in 1:length(dts_)]
+        dn_ = dts_[ns_]
+        @printf("%-24s acc=%9d rej=%9d  near-seam min/med dt = %.1e / %.1e  maxpen = %.1f nm\n",
+                tag, ss.stats.naccept, ss.stats.nreject,
+                isempty(dn_) ? NaN : minimum(dn_),
+                isempty(dn_) ? NaN : sort(dn_)[div(end, 2) + 1],
+                (maximum(abs.(x2_)) - pp.gp)*1e9)
+        return nothing
+    end
+    probe_run("baseline Rodas5P")
+    probe_run("Rosenbrock23 (order 2/3)"; alg = Rosenbrock23())
+    probe_run("FBDF (variable order)";    alg = FBDF())
+    probe_run("Rodas5P autodiff=false";   alg = Rodas5P(autodiff = false))
+    probe_run("wall off (kw = 0)";        pmod! = pp -> (pp.kw = 0.0; nothing))
+    probe_run("quadratic wall (pw = 2)";  pmod! = pp -> (pp.kw = 1.2e10; pp.pw = 2.0; nothing))
 end

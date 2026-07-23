@@ -37,12 +37,13 @@
 
 module ReferenceCollisionModel
 
-using OrdinaryDiffEq
-using Printf
+using DifferentialEquations   # matches your existing env; `using OrdinaryDiffEq`
+using Printf                  # is sufficient if you add that package explicitly
 using Plots
 
 export build_params, rhs!, vout, run_pulse_demo, run_full_span,
-       energy_ledger, HarvesterRun, save_figures, export_csv
+       energy_ledger, HarvesterRun, save_figures, export_csv,
+       sweep_gamma, mean_load_power
 
 # ---------------------------------------------------------------- parameters --
 function build_params(; g0=14e-6, Tp=120e-9, Tf=25e-6, wt=9e-6, wb=30e-6,
@@ -209,20 +210,21 @@ function summarize(sol, p; n_coarse = 40001, fine_dt = 2e-7)
     V  = p.Vbias .- U[5, :] ./ Ct
     maxpen = maximum(abs.(U[3, :])) - p.gp
     vpeak  = maximum(abs.(V))
+    # duty from the coarse grid over the FULL span (episode-count independent;
+    # the earlier per-episode accumulation was silently capped at 8 episodes)
+    duty = count(x -> abs(x) > p.gp, U[3, :]) / n_coarse
     eps = contact_episodes(p.events)
-    tcontact = 0.0
-    for (i, (ta, tb)) in enumerate(eps)                # alias-free refinement
+    for (i, (ta, tb)) in enumerate(eps)    # alias-free sharpening of peaks only
         i > 8 && break
         tz = collect(range(max(t0, ta - 5e-6), min(t1, tb + 5e-6); step = fine_dt))
         Uz = Array(sol(tz))
         pen = abs.(Uz[3, :]) .- p.gp
         maxpen = max(maxpen, maximum(pen))
-        tcontact += count(>(0.0), pen)*fine_dt
         Ctz = [cap(x, p)[1] + p.cp for x in Uz[3, :]]
         vpeak = max(vpeak, maximum(abs.(p.Vbias .- Uz[5, :] ./ Ctz)))
     end
     return RunSummary(sol.retcode, length(sol.t), t0, t1, length(p.events),
-                      eps, tcontact/(t1 - t0), maxpen,
+                      eps, duty, maxpen,
                       energy_ledger(sol, p), vpeak,
                       minimum(Ct), maximum(Ct))
 end
@@ -343,10 +345,81 @@ function run_full_span(; gamma = 2.1, f = 20.0, t_ramp = 0.2, T = 0.5,
     return HarvesterRun(sol, p, summarize(sol, p))
 end
 
+# ------------------------------------------------------------------- sweep --
+# Python-twin acceptance grid (verify_sweep.py: Radau, rtol 1e-6, T = 0.5 s,
+# cdamp = 1.0, hmin = 50 nm). onset/duty/maxpen/pkV/Pload are the robust
+# comparands; event counts can shift by a few for grazing taps (at gamma = 3.0
+# they matched exactly across languages: 416 events, 25 episodes).
+#  gamma  onset_ms  events  episodes  duty%  maxpen_nm  max_x1_um  pkV_mV  Pload_pW
+#   1.00      --        0         0    0.00       0.0       6.10     0.01     0.000
+#   1.50      --        0         0    0.00       0.0       8.74     0.02     0.001
+#   2.00      --        0         0    0.00       0.0      11.09     0.05     0.003
+#   2.10      --        0         0    0.00       0.0      11.54     0.06     0.004
+#   2.50     213.9     48        12    0.46       4.3      13.78     2.45     0.264
+#   3.00     185.4    416        25   13.07       7.6      13.80     4.03     0.408
+#   3.50     160.3    372        27   24.19       8.7      13.81     4.86     0.521
+#   4.00     136.0    390        29   31.15       9.8      13.82     5.58     0.585
+function mean_load_power(run::HarvesterRun; tmin = 0.3, n = 20001)
+    p = run.p
+    lo = max(tmin, run.sol.t[1])
+    tg = collect(range(lo, run.sol.t[end]; length = n))
+    U  = Array(run.sol(tg))
+    acc = 0.0
+    for i in 1:n
+        Ct = cap(U[3, i], p)[1] + p.cp
+        qd = (p.Vbias - U[5, i]/Ct)/p.Rload
+        acc += p.Rload*qd^2
+    end
+    return acc/n
+end
+
+function sweep_gamma(gammas = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0];
+                     T = 0.5, cdamp = 1.0, csv = nothing)
+    runs = HarvesterRun[]
+    rows = String[]
+    @printf(" gamma  onset_ms  events  episodes   duty%%  maxpen_nm  max_x1_um   pkV_mV  Pload_pW    steps\n")
+    for g in gammas
+        r = run_full_span(gamma = g, T = T, cdamp = cdamp)
+        push!(runs, r)
+        s = r.summary
+        onset = isempty(r.p.events) ? "      -- " : @sprintf("%9.1f", minimum(r.p.events)*1e3)
+        maxx1 = maximum(abs(u[1]) for u in r.sol.u)
+        Pl = mean_load_power(r; tmin = 0.6*T)
+        line = @sprintf("%6.2f %s %7d %9d %7.2f %10.1f %10.2f %8.2f %9.3f %8d",
+                        g, onset, s.nguard, length(s.episodes), 100*s.duty,
+                        max(s.maxpen, 0.0)*1e9, maxx1*1e6, s.vpeak*1e3,
+                        Pl*1e12, s.nsteps)
+        println(line)
+        push!(rows, line)
+    end
+    if csv !== nothing
+        open(csv, "w") do io
+            println(io, "gamma,onset_ms,events,episodes,duty_pct,maxpen_nm,max_x1_um,pkV_mV,Pload_pW,steps")
+            for line in rows
+                println(io, join(split(line), ","))
+            end
+        end
+    end
+    return runs
+end
+
 end # module
 
+# ------------------------------------------------------------------ driver --
+# This footer executes whenever the file is run or include()d, so the file is
+# self-driving: no `using` step needed. Qualified names (RCM.f) are deliberate:
+# after editing and re-including you get "WARNING: replacing module ..." and any
+# bare names previously imported with `using .ReferenceCollisionModel` keep
+# pointing at the OLD module -- qualified calls always hit the fresh one.
+# (For bare names, restart the REPL or use Revise.jl.)
 
-run = run_pulse_demo()                 # summary card prints on display
-save_figures(run; dir = "figs")        # PNGs: overview + alias-free zooms
-export_csv(run, "pulse_run.csv")       # decimated table for external tools
-run = run_full_span(gamma = 3.0)
+RCM = ReferenceCollisionModel
+
+res = RCM.run_pulse_demo()      # acceptance test: expect 2 guard events,
+display(res)                    # one episode ~2-85 us, ~22 nm, ledger ~1e-7
+
+# uncomment as needed:
+RCM.save_figures(res; dir = "figs")            # PNG overviews + episode zooms
+RCM.export_csv(res, "pulse_run.csv")           # decimated table
+res_full = RCM.run_full_span(gamma = 3.0); display(res_full)
+runs = RCM.sweep_gamma(csv = "sweep_julia.csv")  # acceptance grid; compare to

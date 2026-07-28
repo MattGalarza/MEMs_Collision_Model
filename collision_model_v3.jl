@@ -591,8 +591,6 @@ function inspect(sol, p; t0 = sol.t[1], t1 = sol.t[end], dt = nothing,
                                   round(t1; sigdigits = 4), " s,  dt = ", dt, " s]"))
 end
 
-inspect(sol, p_new)
-
 
 
 

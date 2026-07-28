@@ -526,6 +526,86 @@ p11  = plot(to, Wover.Fd, xlabel = "Time (s)", ylabel = "Fd (N)", title = "Visco
 p12  = plot(to, Wover.Fe, xlabel = "Time (s)", ylabel = "Fe (N)", title = "Electrostatic Force (attractive)"); display(p12)
 p13  = plot(to, Wover.ae, xlabel = "Time (s)", ylabel = "a_ext (m/s^2)", title = "Applied Base Acceleration"); display(p13)
 
+
+# ======================= INTERACTIVE SIGNAL INSPECTOR (v3.9) =============================
+# Pan / zoom / hover inspection of any run, alongside the static journal plots.
+# Usage (any time after the solve):
+#   inspect(sol, p_new)                                  # defaults: pen, x2dot, Vout
+#   inspect(sol, p_new; t0 = 0.185, t1 = 0.195)          # time window in seconds
+#   inspect(sol, p_new; ch = [:pen, :Fe, :V], dt = 1e-7) # pick channels / sampling
+#   inspect(Wep; ch = [:pen, :x2dot])                    # inspect an existing window
+# Controls (Plotly toolbar, opens in browser/plot pane): box-drag = zoom,
+# pan tool = drag to move, axis scroll = zoom that axis, double-click = reset,
+# hover = exact values, click a legend entry = hide/show that trace. All
+# panels share a linked time axis, so zooming one zooms all.
+# If the Plotly backend errors on first use:  import Pkg; Pkg.add("PlotlyBase")
+# The function restores GR + the journal theme afterwards, so the static
+# publication plots are completely unaffected.
+const INSPECT_CH = (
+    x1    = (:x1,    1e6,  "x1 (um)"),
+    x1dot = (:x1dot, 1e3,  "x1dot (mm/s)"),
+    x2    = (:x2,    1e6,  "x2 (um)"),
+    x2dot = (:x2dot, 1e3,  "x2dot (mm/s)"),
+    pen   = (:pen,   1e9,  "|x2|-gp (nm)"),
+    V     = (:V,     1e3,  "Vout (mV)"),
+    Q     = (:Q,     1e12, "Q (pC)"),
+    Ct    = (:Ct,    1e12, "Ct (pF)"),
+    Fe    = (:Fe,    1e6,  "Fe (uN)"),
+    Fw    = (:Fw,    1e6,  "Fw (uN)"),
+    Fd    = (:Fd,    1e6,  "Fd (uN)"),
+    Fc    = (:Fc,    1e6,  "Fc (uN)"),
+    Fs    = (:Fs,    1e6,  "Fs (uN)"),
+    ae    = (:ae,    1.0,  "a_ext (m/s^2)"),
+)
+ 
+function inspect(Wd::NamedTuple; ch = [:pen, :x2dot, :V], title = "inspector")
+    try
+        plotly()
+    catch
+        @warn "Plotly backend unavailable -- rendering static GR instead."
+    end
+    ps = []
+    for (k, c) in enumerate(ch)
+        f, sc, lb = INSPECT_CH[c]
+        y = getfield(Wd, f) .* sc
+        pl = plot(Wd.t, y; label = string(c), ylabel = lb, lw = 1.0,
+                  legend = :topright, fontfamily = "sans-serif",
+                  xlabel = k == length(ch) ? "t (s)" : "")
+        c === :pen && hline!(pl, [0.0]; ls = :dash, lc = :gray, label = "")
+        push!(ps, pl)
+    end
+    plt = plot(ps...; layout = (length(ch), 1), link = :x,
+               size = (1000, 260*length(ch)), plot_title = title,
+               fontfamily = "sans-serif")
+    display(plt)
+    gr(); set_journal_theme()      # restore the static-plot environment
+    return plt
+end
+ 
+function inspect(sol, p; t0 = sol.t[1], t1 = sol.t[end], dt = nothing,
+                 ch = [:pen, :x2dot, :V])
+    dt === nothing && (dt = max((t1 - t0)/150_000, 1e-7))
+    Wd = sample_window(sol, p, t0, t1; dt = dt)
+    return inspect(Wd; ch = ch,
+                   title = string("inspector  [", round(t0; sigdigits = 4), " s - ",
+                                  round(t1; sigdigits = 4), " s,  dt = ", dt, " s]"))
+end
+
+inspect(sol, p_new)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ============================== EVALUATION SUITE (v3.7) ==================================
 # =========================================================================================
 # (1) force-function characterization sweeps      (2) two-cycle steady-state zooms

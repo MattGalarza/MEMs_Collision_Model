@@ -34,32 +34,30 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
 
 @with_kw mutable struct Params{T<:Real}
     # Fundamental geometric parameters
-    g0::T = 14e-6        # Initial gap
-    Tp::T = 120e-9       # Parylene-C thickness
-    Tf::T = 25e-6        # Electrode thickness
-    wt::T = 9e-6         # Electrode width, top
-    wb::T = 30e-6        # Electrode width, bottom
-    ws::T = 14.7e-6      # Suspension spring width
-    wss::T = 14e-6       # Soft-stopper width
-    Leff::T = 400e-6     # Effective electrode length
-    Lf::T = 450e-6       # Full electrode length
-    Lsp::T = 1400e-6     # Suspension spring length
-    Lss::T = 1000e-6     # Soft-stopper length
-    gss::T = 14e-6       # Soft-stopper position
+    g0::T = 14e-6  # Initial gap
+    Tp::T = 120e-9  # Parylene-C thickness
+    Tf::T = 25e-6  # Electrode thickness
+    wt::T = 9e-6  # Electrode width, top
+    wb::T = 30e-6  # Electrode width, bottom
+    ws::T = 14.7e-6  # Suspension spring width
+    wss::T = 14e-6  # Soft-stopper width
+    Leff::T = 400e-6  # Effective electrode length
+    Lf::T = 450e-6  # Full electrode length
+    Lsp::T = 1400e-6  # Suspension spring length
+    Lss::T = 1000e-6  # Soft-stopper length
+    gss::T = 14e-6  # Soft-stopper position
 
     # Mass and material properties
-    m1::T = 2.0933e-6    # Shuttle mass
-    rho::T = 2330.0      # Density of silicon
-    E::T = 170e9         # Young's modulus
-    e::T = 8.85e-12      # Permittivity of free space
-    ep::T = 3.2          # Relative permittivity of Parylene-C
-    eta::T = 1.849e-5    # Viscosity of air
-    c::T = 1.0           # F6: film scale -- PHYSICAL default (UDE calibrates later)
-    c1::T = 0.001         # Shuttle damping [N s/m]. CAUTION: 0.05 gives
-                         # zeta1 = c1/(2*sqrt(k1*m1)) ~ 9.5 (heavily overdamped
-                         # shuttle); a light physical loss is ~1e-4..1e-3.
-    lambda::T = 70e-9    # Mean free path of air molecules (m)
-    sigmap::T = 1.016    # Slip coefficient for rarefaction
+    m1::T = 2.0933e-6  # Shuttle mass
+    rho::T = 2330.0  # Density of silicon
+    E::T = 170e9  # Young's modulus
+    e::T = 8.85e-12  # Permittivity of free space
+    ep::T = 3.2  # Relative permittivity of Parylene-C
+    eta::T = 1.849e-5  # Viscosity of air
+    c::T = 1.0  # F6: film scale -- PHYSICAL default (UDE calibrates later)
+    c1::T = 0.001  # Shuttle damping [N s/m]. CAUTION: 0.05 gives
+    lambda::T = 70e-9  # Mean free path of air molecules (m)
+    sigmap::T = 1.016  # Slip coefficient for rarefaction
 
     # Model-variant switches (v3.8) -----------------------------------------
     cap_model::Symbol = :v3   # :v3 = derived rotation branch; :ramp = paper
@@ -123,31 +121,28 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     cw::T = 50.0         # Hunt-Crossley dissipation (s/m)
 
     # Electrical parameters
-    N::Int = 160         # Number of electrodes
-    cp::T = 5e-12        # Parasitic capacitance
-    Vbias::T = 3.0       # Bias voltage
-    Rload::T = 0.42e6    # Load resistance
+    N::Int = 160  # Number of electrodes
+    cp::T = 5e-12  # Parasitic capacitance
+    Vbias::T = 3.0  # Bias voltage
+    Rload::T = 0.42e6  # Load resistance
 
     # Derived parameters - calculated by create_params()
-    gp::T = g0 - 2*Tp        # Initial electrode air gap (travel to contact)
-    a::T = (wb - wt)/Leff    # Taper ratio
-    crl::T = 0.0             # Dielectric layer capacitance
-    kp::T = 0.0              # Slip conductance length 6*sigmap*lambda
-    W::T = 0.0               # Sealing-blend half width h_eff/2
-    a_min::T = 0.0           # Wedge-slope floor
-    m2::T = 0.0              # Modal mass of electrode
-    ke::T = 0.0              # Electrode spring constant
-    k1::T = 0.0              # Linear spring constant
-    k3::T = 0.0              # Cubic spring constant
-    kss::T = 0.0             # Soft-stopper spring constant
+    gp::T = g0 - 2*Tp  # Initial electrode air gap (travel to contact)
+    a::T = (wb - wt)/Leff  # Taper ratio
+    crl::T = 0.0  # Dielectric layer capacitance
+    kp::T = 0.0  # Slip conductance length 6*sigmap*lambda
+    W::T = 0.0  # Sealing-blend half width h_eff/2
+    a_min::T = 0.0  # Wedge-slope floor
+    m2::T = 0.0  # Modal mass of electrode
+    ke::T = 0.0  # Electrode spring constant
+    k1::T = 0.0  # Linear spring constant
+    k3::T = 0.0  # Cubic spring constant
+    kss::T = 0.0  # Soft-stopper spring constant
     # Film tables (built by create_params from direct Reynolds quadrature)
-    LH::Vector{T} = T[]      # log gap grid
-    LB::Vector{T} = T[]      # log b_translational
-    TRA::Vector{T} = T[]     # wedge-slope grid
-    TRB::Vector{T} = T[]     # b_rotational (sealed pivot)
-    # v3.2: analytic C-infinity film fits (replace piecewise-linear table lookup;
-    # the lerp curvature jumps at 240 nodes -- 0.05 nm spacing at 1 nm gap --
-    # were forcing sub-ns Jacobian re-resolution during seam skating)
+    LH::Vector{T} = T[]  # log gap grid
+    LB::Vector{T} = T[]  # log b_translational
+    TRA::Vector{T} = T[]  # wedge-slope grid
+    TRB::Vector{T} = T[]  # b_rotational (sealed pivot)
     FTmu::T = 0.0; FTsd::T = 1.0; FTc::Vector{T} = T[]   # log b_trans vs log h
     FRmu::T = 0.0; FRsd::T = 1.0; FRc::Vector{T} = T[]   # log b_rot  vs log au
 end
@@ -413,9 +408,9 @@ import .AnalyticalModel
 # --------------------------------------- External Force ------------------------------------
 
 # Sine Wave External Force
-f = 20.0        # Frequency (Hz)
-alpha = 2.8     # Applied acceleration constant; contact threshold alpha* = 2.45 +- 0.05
-g = 9.81        # Gravitational constant (m/s^2)
+f = 20.0  # Frequency (Hz)
+alpha = 2.8  # Applied acceleration constant; contact threshold alpha* = 2.45 +- 0.05
+g = 9.81  # Gravitational constant (m/s^2)
 A = alpha*g
 t_ramp = 0.2    # Ramp-up duration (s)
 ramp(t) = t < t_ramp ? t/t_ramp : 1.0

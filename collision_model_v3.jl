@@ -155,8 +155,7 @@ function create_params(p::Params{T}; verbose = true) where T<:Real
 
     # Electrode spring constant, ke (tapered Castigliano; verified == direct integral)
     num  = p.E * p.Tf * p.wt^2 * (p.wb - p.wt)^3
-    dem  = 6 * p.Lf^3 * ((p.wb - 3*p.wt)*(p.wb - p.wt) +
-                         2*p.wt^2*(log(p.Lf*p.wb) - log(p.Lf*p.wt)))
+    dem  = 6 * p.Lf^3 * ((p.wb - 3*p.wt)*(p.wb - p.wt) + 2*p.wt^2*(log(p.Lf*p.wb) - log(p.Lf*p.wt)))
     p.ke = num/dem
 
     # Suspension / stopper spring constants
@@ -591,25 +590,65 @@ function inspect(sol, p; t0 = sol.t[1], t1 = sol.t[end], dt = nothing,
                                   round(t1; sigdigits = 4), " s,  dt = ", dt, " s]"))
 end
 
+inspect(sol, p_new; t0 = 0.185, t1 = 0.195)
 
 
+# ===================== SLOW-MOTION CHANNEL ANIMATIONS (v3.9) =============================
+# One looping GIF per state / force, drawn as a moving cursor + progressive
+# trace over a chosen window, slowed to human speed. GIFs loop automatically,
+# giving the repeating-window playback; each file opens in its own viewer
+# window alongside the static plots.
+# Usage (after the solve):
+#   animate_channels(sol, p_new)                       # last full drive cycle,
+#                                                      # all 13 channels, ~12 s loops
+#   animate_channels(sol, p_new; ch = [:pen, :Fw, :V]) # quick subset
+#   animate_channels(sol, p_new; t0 = 0.4830, t1 = 0.4846, seconds = 15)
+#                                                      # single burst, ~9000x slow:
+#                                                      # THE call for tap anatomy
+# Cost note: frames = seconds*fps per channel; 13 channels x 300 frames takes
+# a few minutes of GIF encoding -- use the ch subset for quick looks.
+function animate_channels(sol, p; t1 = sol.t[end], t0 = t1 - 1/f,
+        ch = [:x1, :x1dot, :x2, :x2dot, :Q, :V, :Ct, :pen, :Fs, :Fc, :Fw, :Fd, :Fe],
+        seconds = 12.0, fps = 25, dt = nothing, dir = ".")
+    nfr = round(Int, seconds*fps)
+    dt === nothing && (dt = max((t1 - t0)/max(4000, 4*nfr), 1e-7))
+    Wd = sample_window(sol, p, t0, t1; dt = dt)
+    n  = length(Wd.t)
+    stride = max(1, div(n, 4000))          # light full-window background trace
+    ib = 1:stride:n
+    slow = seconds/(t1 - t0)
+    files = String[]
+    for c in ch
+        fsym, sc, lb = INSPECT_CH[c]
+        y  = getfield(Wd, fsym) .* sc
+        lo, hi = extrema(y)
+        pad = 0.06*(hi - lo); pad <= 0 && (pad = 0.1*abs(hi) + 1e-12)
+        an = @animate for k in 1:nfr
+            j = clamp(round(Int, k/nfr*n), 2, n)
+            plot(Wd.t[ib] .* 1e3, y[ib]; color = :lightgray, lw = 0.8, label = "",
+                 xlabel = "t (ms)", ylabel = lb, ylim = (lo - pad, hi + pad),
+                 title = string(c, "   t = ", round(Wd.t[j]*1e3; digits = 3),
+                                " ms   (", round(Int, slow), "x slowed)"))
+            plot!(Wd.t[1:j] .* 1e3, y[1:j]; color = :dodgerblue, lw = 1.4, label = "")
+            scatter!([Wd.t[j]*1e3], [y[j]]; color = :red, ms = 4, label = "")
+            c === :pen && hline!([0.0]; ls = :dash, lc = :gray, label = "")
+        end
+        fn = joinpath(dir, string("anim_", c, ".gif"))
+        gif(an, fn; fps = fps)
+        push!(files, fn)
+        println("wrote ", fn)
+    end
+    return files
+end
 
-
-
-
-
-
-
-
-
-
-
+animate_channels(sol, p_new; t0 = 0.4, t1 = 0.5, seconds = 15)
+ 
 # ============================== EVALUATION SUITE (v3.7) ==================================
 # =========================================================================================
 # (1) force-function characterization sweeps      (2) two-cycle steady-state zooms
 # (3) composite multi-panels (states / forces)    (4) collision/discontinuity metrics
 # All sections are read-only with respect to the solve above.
-
+ 
 # =========================== (1) FUNCTION VISUALIZER (v3.7) ==============================
 # Every constitutive function plotted individually over its governing range,
 # with the collision window marked, plus branch-decomposition views showing
@@ -711,8 +750,8 @@ function visualize_functions(p)
     return nothing
 end
 visualize_functions(p_new)
-
-
+ 
+ 
 # ---- capacitance review: monotonicity at the seam + deep-wrap asymptotes ----
 # Characterization-only helper: the paper/v2 branch capacitance (Cmin/Cmax ramp)
 function C_paper(x2, p)
@@ -730,7 +769,7 @@ function C_paper(x2, p)
         return (p.N/2)*(1/(2/p.crl + 1/Cc) + 1/(2/p.crl + 1/Cnc)) + p.cp
     end
 end
-
+ 
 # (i) seam window: is C monotone? (answers the "up then down" reading directly)
 useam2 = range(-3e-7, 3e-7; length = 2001)
 Cv3_s  = [AM.electrostatic(0.0, p_new.gp + u, 0.0, p_new)[1] for u in useam2]
@@ -741,7 +780,7 @@ cc1 = plot(useam2 .* 1e9, Cv3_s .* 1e12; lw = 1.4, label = "v3 (wedge + blend)",
 plot!(cc1, useam2 .* 1e9, Cpp_s .* 1e12; lw = 1.2, ls = :dash, label = "paper Cmin/Cmax branches")
 vspan!(cc1, [-p_new.W*1e9, p_new.W*1e9]; alpha = 0.12, color = :orange, label = "sealing blend")
 display(cc1)
-
+ 
 # (ii) deep-wrap comparison: asymptote set by the PRESSED-contact residual gap
 uw = range(1e-9, p_new.a*p_new.Leff*0.999; length = 1200)
 Cv3_w = [AM.electrostatic(0.0, p_new.gp + u, 0.0, p_new)[1] for u in uw]
@@ -756,14 +795,14 @@ hline!(cc2, [Ccrl_limit*1e12]; ls = :dot, lc = :red,
 vspan!(cc2, [0.0, 0.06]; alpha = 0.18, color = :green,
        label = "dynamically reachable (u <= ~60 nm)")
 display(cc2)
-
+ 
 # ==================== (2)+(3) TWO-CYCLE ZOOMS AND COMPOSITE PANELS =======================
 Tdrive = 1/f
 Wfull = sample_window(sol, p_new, sol.t[1], sol.t[end]; dt = 2e-6)
 Wzoom = sample_window(sol, p_new, sol.t[end] - 2*Tdrive, sol.t[end]; dt = 2e-6)
 # NOTE: 2 us sampling resolves episode structure but ALIASES the ~200 kHz contact
 # micro-ring; the alias-free view is the metrics-section episode window (0.1 us).
-
+ 
 function state_panels(Wd, tag)
     ts = Wd.t .* 1e3
     ps = [plot(ts, Wd.x1 .* 1e6;    ylabel = "x1 (um)",    legend = false),
@@ -794,12 +833,12 @@ function force_panels(Wd, tag)
                titlefontsize = 9, guidefontsize = 8, tickfontsize = 7)
     return fig
 end
-
+ 
 display(state_panels(Wfull, "full span"))
 display(force_panels(Wfull, "full span"))
 display(state_panels(Wzoom, "last 2 drive cycles (steady state)"))
 display(force_panels(Wzoom, "last 2 drive cycles (steady state)"))
-
+ 
 # individual two-cycle versions of each original plot (p3z..p13z)
 tzs = Wzoom.t .* 1e3
 p3z  = plot(tzs, Wzoom.x1;         xlabel = "t (ms)", ylabel = "x1 (m)",    title = "x1 - 2 cycles");    display(p3z)
@@ -814,7 +853,7 @@ p10bz= plot(tzs, Wzoom.Fw;         xlabel = "t (ms)", ylabel = "Fw (N)",    titl
 p11z = plot(tzs, Wzoom.Fd;         xlabel = "t (ms)", ylabel = "Fd (N)",    title = "Fd - 2 cycles");    display(p11z)
 p12z = plot(tzs, Wzoom.Fe;         xlabel = "t (ms)", ylabel = "Fe (N)",    title = "Fe - 2 cycles");    display(p12z)
 p13z = plot(tzs, Wzoom.ae;         xlabel = "t (ms)", ylabel = "a_ext",     title = "Forcing - 2 cycles"); display(p13z)
-
+ 
 # ======================= (4) COLLISION / DISCONTINUITY METRICS ===========================
 println("\n================ COLLISION / DISCONTINUITY METRICS ================")
 pen_c = Wfull.pen
@@ -834,7 +873,7 @@ else
     end
     n_ep = length(epb)
     duty = count(inc)/length(inc)
-
+ 
     # --- alias-free episode window: 0.1 us sampling around the FIRST episode ---
     tw0 = max(onset - 2e-5, sol.t[1])
     # extend window to episode end: first 0.2 ms of sustained separation, cap 6 ms
@@ -873,7 +912,7 @@ else
     iout = findlast(penz .> 0)
     e_eff = (iin === nothing || iout === nothing || iout >= length(penz)) ? NaN :
             sqrt(max(KEe[min(iout+1, end)], 0)/max(KEe[max(iin-1, 1)], 1e-300))
-
+ 
     # --- solver behavior across the seam (from accepted steps) ---
     dts = diff(sol.t)
     x2s = [u[3] for u in sol.u]
@@ -918,7 +957,7 @@ else
                  ylabel = "log10 dt (s)",
                  title = "Accepted dt vs distance to seam (crawl localization)")
     display(m8)
-
+ 
     # --- energy ledger (global correctness of the blended discontinuity) ---
     function ledger(Wd, p; Fext = Fext_input)
         n = length(Wd.t)
@@ -952,7 +991,7 @@ else
     end
     @printf("energy ledger       : episode window %.2e | full span (2 us, aliased) %.2e\n",
             ledger(Wep, p_new), ledger(Wfull, p_new))
-
+ 
     # --- discontinuity-handling figures ---
     m4 = plot((Wep.t .- onset) .* 1e6, penz .* 1e9; lw = 0.7, legend = false,
               xlabel = "t - onset (us)", ylabel = "|x2|-gp (nm)",
@@ -976,8 +1015,8 @@ else
         display(m7)
     end
 end
-
-
+ 
+ 
 # =========================== STEP-FLOOR PROBE (opt-in, v3.4) ===========================
 # Six short A/B runs over (0, 216 ms) -- cruise + first tap -- each seconds-to-a-
 # minute. Interpretation: floor gone under Rosenbrock23/FBDF but not noAD =>
@@ -1009,7 +1048,7 @@ if run_probe
     probe_run("wall off (kw = 0)";        pmod! = pp -> (pp.kw = 0.0; nothing))
     probe_run("quadratic wall (pw = 2)";  pmod! = pp -> (pp.kw = 1.2e10; pp.pw = 2.0; nothing))
 end
-
+ 
 # =========================================================================================
 # ===================== STANDALONE EXPERIMENT HARNESS (opt-in, v3.8) ======================
 # =========================================================================================
@@ -1024,12 +1063,12 @@ end
 # quick pass; 0.5 gives more settled steady-state cycles).
 run_experiments = false
 t_exp = 0.5
-
+ 
 if run_experiments && !use_sine
     @warn "Experiment harness expects sine forcing; set use_sine = true."
 end
 if run_experiments && use_sine
-
+ 
 # ---- compact per-run metrics (the five numbers we discuss, plus signatures) ----
 function ledger_exp(Wd, p)
     n = length(Wd.t); E = zeros(n); Pn = zeros(n)
@@ -1058,7 +1097,7 @@ function ledger_exp(Wd, p)
     thru = maximum(abs.(E)) + maximum(abs, Pn)*(Wd.t[end] - Wd.t[1])
     return resid/thru
 end
-
+ 
 function experiment_metrics(sol_, p; label = "")
     Wf  = sample_window(sol_, p, sol_.t[1], sol_.t[end]; dt = 2e-6)
     inc = Wf.pen .> 0
@@ -1101,7 +1140,7 @@ function experiment_metrics(sol_, p; label = "")
     return (; label, engaged = true, onset = onset*1e3, duty, hold = hold_ms,
               maxpen, e_eff, f_c, Vpk, Vdc, ledg, rej, latch)
 end
-
+ 
 function print_exp_header()
     @printf("%-22s | eng | onset  | duty  | hold  | maxpen |  e_eff | f_c    | Vpk   | Vdc    | ledger  | rej   | latch\n",
             "experiment")
@@ -1113,7 +1152,7 @@ function print_exp_row(m)
             m.label, m.engaged ? "Y" : "n", m.onset, m.duty, m.hold, m.maxpen,
             m.e_eff, m.f_c, m.Vpk, m.Vdc, m.ledg, m.rej, m.latch ? "YES" : "no")
 end
-
+ 
 # ---- driver: fresh params, single-knob modification, rebuild, solve, measure ----
 function run_experiment(label; mod! = (pp -> nothing), keepsol = false, alg = Rodas5P())
     pp = Params{Float64}()
@@ -1126,16 +1165,16 @@ function run_experiment(label; mod! = (pp -> nothing), keepsol = false, alg = Ro
     print_exp_row(m)
     return keepsol ? (m, se, pp) : (m, nothing, pp)
 end
-
+ 
 println("\n================== EXPERIMENT HARNESS (alpha = ", alpha, ", t_exp = ", t_exp, " s) ==================")
 print_exp_header()
-
+ 
 # Pass 1: invariance -- the main run above, measured with the same instrument,
 # then a fresh default build. The two rows must agree to plotting precision.
 m_main = experiment_metrics(sol, p_new; label = "main run (above)")
 print_exp_row(m_main)
 mB, sB, pB = run_experiment("baseline (fresh build)"; keepsol = true)
-
+ 
 # Pass 2: capacitance A/B with the pre-registered latch prediction
 mR, sR, pR = run_experiment("cap_model = :ramp";
                             mod! = pp -> (pp.cap_model = :ramp), keepsol = true)
@@ -1146,7 +1185,7 @@ Rc  = (pR.k1*pR.gp + pR.m1*alpha*g)/(pR.k1 + (pR.N/2)*pR.ke)
 println(mR.latch ?
     "[A/B verdict] LATCH observed (hold $(round(mR.hold; digits=2)) ms) -- prediction CONFIRMED; ramp branch dynamically self-refutes." :
     "[A/B verdict] NO latch (hold $(round(mR.hold; digits=2)) ms) -- prediction REFUTED; report this table back for investigation.")
-
+ 
 # Pass 3: window study, one knob at a time (v3 capacitance throughout)
 println()
 mW3, _, _  = run_experiment("Wfac = 0.3";    mod! = pp -> (pp.Wfac = 0.3))
@@ -1155,11 +1194,11 @@ mH8, _, _  = run_experiment("h_eff = 80 nm"; mod! = pp -> (pp.h_eff = 80e-9))
 mH10, _, _ = run_experiment("h_eff = 100 nm";mod! = pp -> (pp.h_eff = 100e-9))
 mK3, _, _  = run_experiment("kw = 3e6";      mod! = pp -> (pp.kw = 3e6))
 mK10, sK10, pK10 = run_experiment("kw = 1e7";mod! = pp -> (pp.kw = 1e7), keepsol = true)
-
+ 
 println("\nReading guide: crisper stick-unstick = hold DOWN, e_eff UP, f_c UP at rej <~ 0.1;")
 println("h_eff rows move the adhesion well (duty/hold down, Vpk down is the trade);")
 println("latch discriminator: hold > ", round(0.25*0.5e3/f; digits = 1), " ms. Ledger must stay ~1e-8..1e-7.")
-
+ 
 # ---- comparison figures ----
 Td = 1/f
 WzB = sample_window(sB, pB, sB.t[end] - 2*Td, sB.t[end]; dt = 2e-6)
@@ -1186,10 +1225,10 @@ EB !== nothing && plot!(e3, (EB.t .- mB.onset*1e-3) .* 1e6, EB.pen .* 1e9; label
 EW !== nothing && plot!(e3, (EW.t .- mW2.onset*1e-3) .* 1e6, EW.pen .* 1e9; label = "Wfac = 0.2")
 EK !== nothing && plot!(e3, (EK.t .- mK10.onset*1e-3) .* 1e6, EK.pen .* 1e9; label = "kw = 1e7")
 hline!(e3, [0.0]; ls = :dash, lc = :gray, label = ""); display(e3)
-
+ 
 end # run_experiments
-
-
+ 
+ 
 # =========================== MODEL EXPERIMENTS (opt-in, v3.8.1) ==========================
 # Harness rev v3.10: live-parameter echo per run (catches stale-module runs:
 # three consecutive bit-identical tables under 'changed' c1 motivated this);
@@ -1221,10 +1260,10 @@ end # run_experiments
 # edits propagate, runtime p_new edits do NOT), same forcing/solver/tolerances.
 # LATCH criterion: longest continuous contact interval > half a drive period.
 # Cost: 8 solves at main-run size; expect several minutes total.
-run_experiments = true
+run_experiments = false
 make_plots = true          # per-experiment 4-panel figure, saved to exp_<tag>.png
 if run_experiments
-
+ 
     function experiment_metrics(sol, p)
         Wc  = sample_window(sol, p, sol.t[1], sol.t[end]; dt = 2e-6)
         pen = Wc.pen
@@ -1325,7 +1364,7 @@ if run_experiments
                   eeff, ntap, ttap, fring, lam, ballistic, occW, pkV, Pavg, Vrms,
                   regime, ledg)
     end
-
+ 
     results = NamedTuple[]
     function run_experiment(tag; kwargs...)
         pp = AnalyticalModel.Params{Float64}(; kwargs...)
@@ -1387,7 +1426,7 @@ if run_experiments
         end
         return nothing
     end
-
+ 
     println("\n================ MODEL EXPERIMENTS (alpha = $(alpha), t_end = $(tspan[2]) s) ================")
     run_experiment("E0 baseline")
     run_experiment("E1 :ramp";     cap_model = :ramp)
@@ -1397,14 +1436,14 @@ if run_experiments
     run_experiment("E5 heff 100n"; h_eff = 100e-9)
     run_experiment("E6 kw 3e6";    kw = 3e6)
     run_experiment("E7 kw 1e7";    kw = 1e7)
-
+ 
     # -------- PULL-IN / RELEASE VOLTAGE SWEEP (the real discriminator) --------
     # Release condition: Fe(h_eff; Vb) > ke*Rc  =>  V_PI = Vb*sqrt(ke*Rc/Fe(Vb)).
     # Pre-registered predictions at alpha = 2.8 (Rc ~ 57 nm):
     #   :v3   rotation branch  V_PI ~ 5.7 V  (taps at 3-5 V, latches by ~6 V)
     #   :ramp paper branch     V_PI ~ 0.8 V  (taps only below ~0.8 V)
     # A bench measurement of the tap->latch bias boundary calibrates h_eff.
-    run_voltage_sweep = true
+    run_voltage_sweep = false
     if run_voltage_sweep
         println("\n================ PULL-IN VOLTAGE SWEEP (both cap models) ================")
         for cm in (:v3, :ramp), Vb in (0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0)
@@ -1416,7 +1455,7 @@ if run_experiments
                 @printf("%-12s %7s\n", r.tag, r.regime)
         end
     end
-
+ 
     # -------- FILM-HYPOTHESIS TESTS (ring-in vs ring-out) --------
     # Panels to watch: entry-velocity wiggles (ring-in) and post-episode tails.
     # Pre-registered predictions:
@@ -1427,14 +1466,14 @@ if run_experiments
     #   F3 both     : the full press-hypothesis phenomenology -- silent capture,
     #                 oscillatory release. Bench Vout spectrum discriminates:
     #                 ~155 kHz content = capture ring real; ~65 kHz = ring-out.
-    run_film_tests = true
+    run_film_tests = false
     if run_film_tests
         println("\n================ FILM-HYPOTHESIS TESTS ================")
         run_experiment("F1 crot x10"; crot_scale = 10.0)
         run_experiment("F2 vent 0.3"; vent_open = 0.3)
         run_experiment("F3 both";     crot_scale = 10.0, vent_open = 0.3)
     end
-
+ 
     println("\n---- comparison (decision metrics) ----")
     @printf("%-14s %7s %8s %10s %10s %8s %9s %7s\n",
             "tag", "duty%", "maxpen", "Lambda", "tap-type", "pkV", "Vrms", "regime")

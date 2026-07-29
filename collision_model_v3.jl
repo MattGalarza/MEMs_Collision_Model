@@ -64,7 +64,7 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
                               # Eq. 23 Cmin->Cmax log ramp, continuity-repaired
                               # (A/B experiment; prediction: :ramp latches at
                               # first contact since Fe_contact ~ 19 uN >> ke*Rc)
-    Wfac::T = 0.5             # blend half-width W = Wfac*h_eff. 0.5 = legacy;
+    Wfac::T = 0.1             # blend half-width W = Wfac*h_eff. 0.5 = legacy;
                               # 0.2-0.3 tightens the window for crisper
                               # stick-unstick (mild near-seam step-cost rise;
                               # keep epsc >= 1 nm when tightening)

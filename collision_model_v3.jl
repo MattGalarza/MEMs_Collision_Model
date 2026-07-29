@@ -641,7 +641,7 @@ function animate_channels(sol, p; t1 = sol.t[end], t0 = t1 - 1/f,
     return files
 end
 
-animate_channels(sol, p_new; t0 = 0.4, t1 = 0.5, seconds = 15)
+animate_channels(sol, p_new; t0 = 0.4, t1 = 0.5, seconds = 5)
  
 # ============================== EVALUATION SUITE (v3.7) ==================================
 # =========================================================================================

@@ -105,7 +105,7 @@ end
 # ------------------------- External Force -------------------------
 f=20.0; A=2*9.81; t_ramp=0.2; use_ramp=true
 function sine_force(t;A=A,f=f,use_ramp=use_ramp,t_ramp=t_ramp)
-    ramp=use_ramp&&t<t_ramp?t/t_ramp:1.0; return A*ramp*sin(2π*f*t)
+    ramp=use_ramp&&t<t_ramp ? t/t_ramp : 1.0; return A*ramp*sin(2π*f*t)
 end
 function white_noise_force(t;amplitude=9.81,seed=12345,dt=0.001)
     rng=Random.MersenneTwister(seed); k=floor(Int,t/dt)

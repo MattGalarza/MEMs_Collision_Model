@@ -34,37 +34,39 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
 
 @with_kw mutable struct Params{T<:Real}
     # Fundamental geometric parameters
-    g0::T = 14e-6  # Initial gap
-    Tp::T = 120e-9  # Parylene-C thickness
-    Tf::T = 25e-6  # Electrode thickness
-    wt::T = 9e-6  # Electrode width, top
-    wb::T = 30e-6  # Electrode width, bottom
-    ws::T = 14.7e-6  # Suspension spring width
-    wss::T = 14e-6  # Soft-stopper width
-    Leff::T = 400e-6  # Effective electrode length
-    Lf::T = 450e-6  # Full electrode length
-    Lsp::T = 1400e-6  # Suspension spring length
-    Lss::T = 1000e-6  # Soft-stopper length
-    gss::T = 14e-6  # Soft-stopper position
+    g0::T = 14e-6        # Initial gap
+    Tp::T = 120e-9       # Parylene-C thickness
+    Tf::T = 25e-6        # Electrode thickness
+    wt::T = 9e-6         # Electrode width, top
+    wb::T = 30e-6        # Electrode width, bottom
+    ws::T = 14.7e-6      # Suspension spring width
+    wss::T = 14e-6       # Soft-stopper width
+    Leff::T = 400e-6     # Effective electrode length
+    Lf::T = 450e-6       # Full electrode length
+    Lsp::T = 1400e-6     # Suspension spring length
+    Lss::T = 1000e-6     # Soft-stopper length
+    gss::T = 14e-6       # Soft-stopper position
 
     # Mass and material properties
-    m1::T = 2.0933e-6  # Shuttle mass
-    rho::T = 2330.0  # Density of silicon
-    E::T = 170e9  # Young's modulus
-    e::T = 8.85e-12  # Permittivity of free space
-    ep::T = 3.2  # Relative permittivity of Parylene-C
-    eta::T = 1.849e-5  # Viscosity of air
-    c::T = 1.0  # F6: film scale -- PHYSICAL default (UDE calibrates later)
-    c1::T = 0.001  # Shuttle damping [N s/m]. CAUTION: 0.05 gives
-    lambda::T = 70e-9  # Mean free path of air molecules (m)
-    sigmap::T = 1.016  # Slip coefficient for rarefaction
+    m1::T = 2.0933e-6    # Shuttle mass
+    rho::T = 2330.0      # Density of silicon
+    E::T = 170e9         # Young's modulus
+    e::T = 8.85e-12      # Permittivity of free space
+    ep::T = 3.2          # Relative permittivity of Parylene-C
+    eta::T = 1.849e-5    # Viscosity of air
+    c::T = 1.0           # F6: film scale -- PHYSICAL default (UDE calibrates later)
+    c1::T = 0.05         # Shuttle damping [N s/m]. CAUTION: 0.05 gives
+                         # zeta1 = c1/(2*sqrt(k1*m1)) ~ 9.5 (heavily overdamped
+                         # shuttle); a light physical loss is ~1e-4..1e-3.
+    lambda::T = 70e-9    # Mean free path of air molecules (m)
+    sigmap::T = 1.016    # Slip coefficient for rarefaction
 
     # Model-variant switches (v3.8) -----------------------------------------
     cap_model::Symbol = :v3   # :v3 = derived rotation branch; :ramp = paper
                               # Eq. 23 Cmin->Cmax log ramp, continuity-repaired
                               # (A/B experiment; prediction: :ramp latches at
                               # first contact since Fe_contact ~ 19 uN >> ke*Rc)
-    Wfac::T = 0.1             # blend half-width W = Wfac*h_eff. 0.5 = legacy;
+    Wfac::T = 0.5             # blend half-width W = Wfac*h_eff. 0.5 = legacy;
                               # 0.2-0.3 tightens the window for crisper
                               # stick-unstick (mild near-seam step-cost rise;
                               # keep epsc >= 1 nm when tightening)
@@ -81,6 +83,20 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
                               # (softsign over 10 um/s; a hard sign switch on
                               # x2dot would be a derivative jump on a manifold
                               # the trajectory crosses constantly)
+    # Hard stop (as-fabricated frame contact; v3.10) --------------------------
+    # Microscope imaging shows the soft-stopper's semicircular contact is
+    # partially etched into the shuttle: beyond a small residual clearance the
+    # shuttle meets the frame essentially rigidly. Modeled as a near-rigid
+    # Hertz-like wall at |x1| = ghs (ADJUSTABLE: set from the measured residual
+    # standoff; must satisfy ghs >= gss). Conservative, C1, exact gradient of
+    # its potential -- the ledger stays an exact acceptance test. Inactive
+    # whenever max|x1| < ghs, so results at standard operating points are
+    # unchanged. Caps max|x1| -> caps press force through ke -> raises the
+    # effective pull-in threshold (the observed robustness mechanism).
+    ghs::T = 14.3e-6          # hard-stop engagement position [m]
+    khs::T = 1.0e9            # hard-stop stiffness [N/m^(3/2)] (near-rigid)
+    phs::T = 1.5              # hard-stop exponent
+    epshs::T = 1e-9           # activation smoothing [m]
 
     # Contact / boundary parameters (v3) ------------------------------------
     # COLLISION-WINDOW TUNING GUIDE (v3.7). Ordering constraint:
@@ -121,28 +137,31 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     cw::T = 50.0         # Hunt-Crossley dissipation (s/m)
 
     # Electrical parameters
-    N::Int = 160  # Number of electrodes
-    cp::T = 5e-12  # Parasitic capacitance
-    Vbias::T = 3.0  # Bias voltage
-    Rload::T = 0.42e6  # Load resistance
+    N::Int = 160         # Number of electrodes
+    cp::T = 5e-12        # Parasitic capacitance
+    Vbias::T = 3.0       # Bias voltage
+    Rload::T = 0.42e6    # Load resistance
 
     # Derived parameters - calculated by create_params()
-    gp::T = g0 - 2*Tp  # Initial electrode air gap (travel to contact)
-    a::T = (wb - wt)/Leff  # Taper ratio
-    crl::T = 0.0  # Dielectric layer capacitance
-    kp::T = 0.0  # Slip conductance length 6*sigmap*lambda
-    W::T = 0.0  # Sealing-blend half width h_eff/2
-    a_min::T = 0.0  # Wedge-slope floor
-    m2::T = 0.0  # Modal mass of electrode
-    ke::T = 0.0  # Electrode spring constant
-    k1::T = 0.0  # Linear spring constant
-    k3::T = 0.0  # Cubic spring constant
-    kss::T = 0.0  # Soft-stopper spring constant
+    gp::T = g0 - 2*Tp        # Initial electrode air gap (travel to contact)
+    a::T = (wb - wt)/Leff    # Taper ratio
+    crl::T = 0.0             # Dielectric layer capacitance
+    kp::T = 0.0              # Slip conductance length 6*sigmap*lambda
+    W::T = 0.0               # Sealing-blend half width h_eff/2
+    a_min::T = 0.0           # Wedge-slope floor
+    m2::T = 0.0              # Modal mass of electrode
+    ke::T = 0.0              # Electrode spring constant
+    k1::T = 0.0              # Linear spring constant
+    k3::T = 0.0              # Cubic spring constant
+    kss::T = 0.0             # Soft-stopper spring constant
     # Film tables (built by create_params from direct Reynolds quadrature)
-    LH::Vector{T} = T[]  # log gap grid
-    LB::Vector{T} = T[]  # log b_translational
-    TRA::Vector{T} = T[]  # wedge-slope grid
-    TRB::Vector{T} = T[]  # b_rotational (sealed pivot)
+    LH::Vector{T} = T[]      # log gap grid
+    LB::Vector{T} = T[]      # log b_translational
+    TRA::Vector{T} = T[]     # wedge-slope grid
+    TRB::Vector{T} = T[]     # b_rotational (sealed pivot)
+    # v3.2: analytic C-infinity film fits (replace piecewise-linear table lookup;
+    # the lerp curvature jumps at 240 nodes -- 0.05 nm spacing at 1 nm gap --
+    # were forcing sub-ns Jacobian re-resolution during seam skating)
     FTmu::T = 0.0; FTsd::T = 1.0; FTc::Vector{T} = T[]   # log b_trans vs log h
     FRmu::T = 0.0; FRsd::T = 1.0; FRc::Vector{T} = T[]   # log b_rot  vs log au
 end
@@ -155,7 +174,8 @@ function create_params(p::Params{T}; verbose = true) where T<:Real
 
     # Electrode spring constant, ke (tapered Castigliano; verified == direct integral)
     num  = p.E * p.Tf * p.wt^2 * (p.wb - p.wt)^3
-    dem  = 6 * p.Lf^3 * ((p.wb - 3*p.wt)*(p.wb - p.wt) + 2*p.wt^2*(log(p.Lf*p.wb) - log(p.Lf*p.wt)))
+    dem  = 6 * p.Lf^3 * ((p.wb - 3*p.wt)*(p.wb - p.wt) +
+                         2*p.wt^2*(log(p.Lf*p.wb) - log(p.Lf*p.wt)))
     p.ke = num/dem
 
     # Suspension / stopper spring constants
@@ -320,10 +340,16 @@ end
 # --------------------------------- force functions ---------------------------------
 
 # Suspension spring force, Fsp (+ soft stopper) -- unchanged from v2
-function spring(x1, k1, k3, gss, kss)
-    Fsp = -k1*x1 - 0.25*k3*x1^3
-    Fss = abs(x1) <= gss ? 0.0 : -kss*(abs(x1) - gss)*sign(x1)
-    return Fsp + Fss
+function spring(x1, p)
+    Fsp = -p.k1*x1 - 0.25*p.k3*x1^3
+    Fss = abs(x1) <= p.gss ? 0.0 : -p.kss*(abs(x1) - p.gss)*sign(x1)
+    # v3.10 hard stop: as-fabricated frame contact at |x1| = ghs (adjustable).
+    # Near-rigid Hertz-like wall, C1 via softpos, exact potential gradient.
+    u1 = abs(x1) - p.ghs
+    dh = softpos(u1, p.epshs)
+    sp = 0.5*(1 + u1/sqrt(u1*u1 + p.epshs*p.epshs))
+    Fhs = -p.khs*dh^p.phs*sp*sign(x1)
+    return Fsp + Fss + Fhs
 end
 
 # Electrode coupling + wall, Fc / Fw  (F2: spring always on; wall replaces the
@@ -383,7 +409,7 @@ end
 # on the mV-scale output directly. q = (Vbias - Vout)*Ct is the observable.
 function CoupledSystem!(dz, z, p, t, current_acceleration)
     z1, z2, z3, z4, z5 = z
-    Fs = spring(z1, p.k1, p.k3, p.gss, p.kss) - p.c1*z2
+    Fs = spring(z1, p) - p.c1*z2
     Fc, Fw, _ = collision(z1, z3, z4, p)
     Fd = damping(z1, z2, z3, z4, p)
     Ctotal, Fe, dC = electrostatic(z1, z3, z5, p)
@@ -407,9 +433,9 @@ import .AnalyticalModel
 # --------------------------------------- External Force ------------------------------------
 
 # Sine Wave External Force
-f = 20.0  # Frequency (Hz)
-alpha = 2.8  # Applied acceleration constant; contact threshold alpha* = 2.45 +- 0.05
-g = 9.81  # Gravitational constant (m/s^2)
+f = 20.0        # Frequency (Hz)
+alpha = 4.8     # Applied acceleration constant; contact threshold alpha* = 2.45 +- 0.05
+g = 9.81        # Gravitational constant (m/s^2)
 A = alpha*g
 t_ramp = 0.2    # Ramp-up duration (s)
 ramp(t) = t < t_ramp ? t/t_ramp : 1.0
@@ -484,7 +510,7 @@ function sample_window(sol, p, t0, t1; dt = 2e-6, Fext = Fext_input)
     Ct = zeros(n); Fe = zeros(n); Fs = zeros(n); Fc = zeros(n); Fw = zeros(n); Fd = zeros(n)
     for i in 1:n
         z1, z2, z3, z4, z5 = U[1,i], U[2,i], U[3,i], U[4,i], U[5,i]
-        Fs[i] = AM.spring(z1, p.k1, p.k3, p.gss, p.kss)
+        Fs[i] = AM.spring(z1, p)
         fc, fw, _ = AM.collision(z1, z3, z4, p)
         Fc[i] = fc; Fw[i] = fw
         Fd[i] = AM.damping(z1, z2, z3, z4, p)
@@ -525,7 +551,6 @@ p11  = plot(to, Wover.Fd, xlabel = "Time (s)", ylabel = "Fd (N)", title = "Visco
 p12  = plot(to, Wover.Fe, xlabel = "Time (s)", ylabel = "Fe (N)", title = "Electrostatic Force (attractive)"); display(p12)
 p13  = plot(to, Wover.ae, xlabel = "Time (s)", ylabel = "a_ext (m/s^2)", title = "Applied Base Acceleration"); display(p13)
 
-
 # ======================= INTERACTIVE SIGNAL INSPECTOR (v3.9) =============================
 # Pan / zoom / hover inspection of any run, alongside the static journal plots.
 # Usage (any time after the solve):
@@ -556,7 +581,7 @@ const INSPECT_CH = (
     Fs    = (:Fs,    1e6,  "Fs (uN)"),
     ae    = (:ae,    1.0,  "a_ext (m/s^2)"),
 )
- 
+
 function inspect(Wd::NamedTuple; ch = [:pen, :x2dot, :V], title = "inspector")
     try
         plotly()
@@ -580,7 +605,7 @@ function inspect(Wd::NamedTuple; ch = [:pen, :x2dot, :V], title = "inspector")
     gr(); set_journal_theme()      # restore the static-plot environment
     return plt
 end
- 
+
 function inspect(sol, p; t0 = sol.t[1], t1 = sol.t[end], dt = nothing,
                  ch = [:pen, :x2dot, :V])
     dt === nothing && (dt = max((t1 - t0)/150_000, 1e-7))
@@ -589,9 +614,10 @@ function inspect(sol, p; t0 = sol.t[1], t1 = sol.t[end], dt = nothing,
                    title = string("inspector  [", round(t0; sigdigits = 4), " s - ",
                                   round(t1; sigdigits = 4), " s,  dt = ", dt, " s]"))
 end
-
-inspect(sol, p_new; t0 = 0.185, t1 = 0.195)
-
+# Point budget: the default dt targets ~150k samples over the requested span;
+# for microsecond contact features pass an explicit window (t0, t1) with
+# dt = 1e-7 rather than zooming a coarse full-span render, or the fine
+# structure you zoom into will be the sampling grid, not the physics.
 
 # ===================== SLOW-MOTION CHANNEL ANIMATIONS (v3.9) =============================
 # One looping GIF per state / force, drawn as a moving cursor + progressive
@@ -641,14 +667,12 @@ function animate_channels(sol, p; t1 = sol.t[end], t0 = t1 - 1/f,
     return files
 end
 
-animate_channels(sol, p_new; t0 = 0.4, t1 = 0.5, seconds = 5)
- 
 # ============================== EVALUATION SUITE (v3.7) ==================================
 # =========================================================================================
 # (1) force-function characterization sweeps      (2) two-cycle steady-state zooms
 # (3) composite multi-panels (states / forces)    (4) collision/discontinuity metrics
 # All sections are read-only with respect to the solve above.
- 
+
 # =========================== (1) FUNCTION VISUALIZER (v3.7) ==============================
 # Every constitutive function plotted individually over its governing range,
 # with the collision window marked, plus branch-decomposition views showing
@@ -658,10 +682,11 @@ function visualize_functions(p)
     markband!(pl) = vspan!(pl, [-W_*1e9, W_*1e9]; alpha = 0.10, color = :orange, label = "")
     # V1 suspension + stopper
     x1g = range(-16e-6, 16e-6; length = 1601)
-    v = plot(x1g .* 1e6, [AM.spring(x, p.k1, p.k3, p.gss, p.kss)*1e6 for x in x1g];
+    v = plot(x1g .* 1e6, [AM.spring(x, p)*1e6 for x in x1g];
              legend = false, xlabel = "x1 (um)", ylabel = "Fs (uN)",
              title = "V1  Suspension + stopper")
-    vline!(v, [p.gss*1e6, -p.gss*1e6]; ls = :dash, lc = :gray); display(v)
+    vline!(v, [p.gss*1e6, -p.gss*1e6]; ls = :dash, lc = :gray)
+    vline!(v, [p.ghs*1e6, -p.ghs*1e6]; ls = :dot, lc = :red); display(v)
     # V2 coupling spring
     rg = range(-0.5e-6, 0.5e-6; length = 301)
     display(plot(rg .* 1e9, [-p.ke*r*1e6 for r in rg]; legend = false,
@@ -750,8 +775,8 @@ function visualize_functions(p)
     return nothing
 end
 visualize_functions(p_new)
- 
- 
+
+
 # ---- capacitance review: monotonicity at the seam + deep-wrap asymptotes ----
 # Characterization-only helper: the paper/v2 branch capacitance (Cmin/Cmax ramp)
 function C_paper(x2, p)
@@ -769,7 +794,7 @@ function C_paper(x2, p)
         return (p.N/2)*(1/(2/p.crl + 1/Cc) + 1/(2/p.crl + 1/Cnc)) + p.cp
     end
 end
- 
+
 # (i) seam window: is C monotone? (answers the "up then down" reading directly)
 useam2 = range(-3e-7, 3e-7; length = 2001)
 Cv3_s  = [AM.electrostatic(0.0, p_new.gp + u, 0.0, p_new)[1] for u in useam2]
@@ -780,7 +805,7 @@ cc1 = plot(useam2 .* 1e9, Cv3_s .* 1e12; lw = 1.4, label = "v3 (wedge + blend)",
 plot!(cc1, useam2 .* 1e9, Cpp_s .* 1e12; lw = 1.2, ls = :dash, label = "paper Cmin/Cmax branches")
 vspan!(cc1, [-p_new.W*1e9, p_new.W*1e9]; alpha = 0.12, color = :orange, label = "sealing blend")
 display(cc1)
- 
+
 # (ii) deep-wrap comparison: asymptote set by the PRESSED-contact residual gap
 uw = range(1e-9, p_new.a*p_new.Leff*0.999; length = 1200)
 Cv3_w = [AM.electrostatic(0.0, p_new.gp + u, 0.0, p_new)[1] for u in uw]
@@ -795,14 +820,14 @@ hline!(cc2, [Ccrl_limit*1e12]; ls = :dot, lc = :red,
 vspan!(cc2, [0.0, 0.06]; alpha = 0.18, color = :green,
        label = "dynamically reachable (u <= ~60 nm)")
 display(cc2)
- 
+
 # ==================== (2)+(3) TWO-CYCLE ZOOMS AND COMPOSITE PANELS =======================
 Tdrive = 1/f
 Wfull = sample_window(sol, p_new, sol.t[1], sol.t[end]; dt = 2e-6)
 Wzoom = sample_window(sol, p_new, sol.t[end] - 2*Tdrive, sol.t[end]; dt = 2e-6)
 # NOTE: 2 us sampling resolves episode structure but ALIASES the ~200 kHz contact
 # micro-ring; the alias-free view is the metrics-section episode window (0.1 us).
- 
+
 function state_panels(Wd, tag)
     ts = Wd.t .* 1e3
     ps = [plot(ts, Wd.x1 .* 1e6;    ylabel = "x1 (um)",    legend = false),
@@ -833,12 +858,12 @@ function force_panels(Wd, tag)
                titlefontsize = 9, guidefontsize = 8, tickfontsize = 7)
     return fig
 end
- 
+
 display(state_panels(Wfull, "full span"))
 display(force_panels(Wfull, "full span"))
 display(state_panels(Wzoom, "last 2 drive cycles (steady state)"))
 display(force_panels(Wzoom, "last 2 drive cycles (steady state)"))
- 
+
 # individual two-cycle versions of each original plot (p3z..p13z)
 tzs = Wzoom.t .* 1e3
 p3z  = plot(tzs, Wzoom.x1;         xlabel = "t (ms)", ylabel = "x1 (m)",    title = "x1 - 2 cycles");    display(p3z)
@@ -853,7 +878,7 @@ p10bz= plot(tzs, Wzoom.Fw;         xlabel = "t (ms)", ylabel = "Fw (N)",    titl
 p11z = plot(tzs, Wzoom.Fd;         xlabel = "t (ms)", ylabel = "Fd (N)",    title = "Fd - 2 cycles");    display(p11z)
 p12z = plot(tzs, Wzoom.Fe;         xlabel = "t (ms)", ylabel = "Fe (N)",    title = "Fe - 2 cycles");    display(p12z)
 p13z = plot(tzs, Wzoom.ae;         xlabel = "t (ms)", ylabel = "a_ext",     title = "Forcing - 2 cycles"); display(p13z)
- 
+
 # ======================= (4) COLLISION / DISCONTINUITY METRICS ===========================
 println("\n================ COLLISION / DISCONTINUITY METRICS ================")
 pen_c = Wfull.pen
@@ -873,7 +898,7 @@ else
     end
     n_ep = length(epb)
     duty = count(inc)/length(inc)
- 
+
     # --- alias-free episode window: 0.1 us sampling around the FIRST episode ---
     tw0 = max(onset - 2e-5, sol.t[1])
     # extend window to episode end: first 0.2 ms of sustained separation, cap 6 ms
@@ -912,7 +937,7 @@ else
     iout = findlast(penz .> 0)
     e_eff = (iin === nothing || iout === nothing || iout >= length(penz)) ? NaN :
             sqrt(max(KEe[min(iout+1, end)], 0)/max(KEe[max(iin-1, 1)], 1e-300))
- 
+
     # --- solver behavior across the seam (from accepted steps) ---
     dts = diff(sol.t)
     x2s = [u[3] for u in sol.u]
@@ -957,7 +982,7 @@ else
                  ylabel = "log10 dt (s)",
                  title = "Accepted dt vs distance to seam (crawl localization)")
     display(m8)
- 
+
     # --- energy ledger (global correctness of the blended discontinuity) ---
     function ledger(Wd, p; Fext = Fext_input)
         n = length(Wd.t)
@@ -968,6 +993,7 @@ else
             KE = 0.5*p.m1*v1_^2 + (p.N/2)*0.5*p.m2*v2_^2
             Vm = 0.5*p.k1*x1_^2 + (0.25/4)*p.k3*x1_^4 +
                  (abs(x1_) > p.gss ? 0.5*p.kss*(abs(x1_) - p.gss)^2 : 0.0) +
+                 (p.khs/(p.phs + 1))*AM.softpos(abs(x1_) - p.ghs, p.epshs)^(p.phs + 1) +
                  (p.N/2)*0.5*p.ke*(x1_ - x2_)^2 + (p.N/2)*(p.kw/(p.pw + 1))*d^(p.pw + 1)
             E[i] = KE + Vm + q_^2/(2*Wd.Ct[i])
             qd = (p.Vbias - q_/Wd.Ct[i])/p.Rload
@@ -991,7 +1017,7 @@ else
     end
     @printf("energy ledger       : episode window %.2e | full span (2 us, aliased) %.2e\n",
             ledger(Wep, p_new), ledger(Wfull, p_new))
- 
+
     # --- discontinuity-handling figures ---
     m4 = plot((Wep.t .- onset) .* 1e6, penz .* 1e9; lw = 0.7, legend = false,
               xlabel = "t - onset (us)", ylabel = "|x2|-gp (nm)",
@@ -1015,8 +1041,8 @@ else
         display(m7)
     end
 end
- 
- 
+
+
 # =========================== STEP-FLOOR PROBE (opt-in, v3.4) ===========================
 # Six short A/B runs over (0, 216 ms) -- cruise + first tap -- each seconds-to-a-
 # minute. Interpretation: floor gone under Rosenbrock23/FBDF but not noAD =>
@@ -1048,7 +1074,7 @@ if run_probe
     probe_run("wall off (kw = 0)";        pmod! = pp -> (pp.kw = 0.0; nothing))
     probe_run("quadratic wall (pw = 2)";  pmod! = pp -> (pp.kw = 1.2e10; pp.pw = 2.0; nothing))
 end
- 
+
 # =========================================================================================
 # ===================== STANDALONE EXPERIMENT HARNESS (opt-in, v3.8) ======================
 # =========================================================================================
@@ -1063,12 +1089,12 @@ end
 # quick pass; 0.5 gives more settled steady-state cycles).
 run_experiments = false
 t_exp = 0.5
- 
+
 if run_experiments && !use_sine
     @warn "Experiment harness expects sine forcing; set use_sine = true."
 end
 if run_experiments && use_sine
- 
+
 # ---- compact per-run metrics (the five numbers we discuss, plus signatures) ----
 function ledger_exp(Wd, p)
     n = length(Wd.t); E = zeros(n); Pn = zeros(n)
@@ -1078,6 +1104,7 @@ function ledger_exp(Wd, p)
         KE = 0.5*p.m1*v1_^2 + (p.N/2)*0.5*p.m2*v2_^2
         Vm = 0.5*p.k1*x1_^2 + (0.25/4)*p.k3*x1_^4 +
              (abs(x1_) > p.gss ? 0.5*p.kss*(abs(x1_) - p.gss)^2 : 0.0) +
+                 (p.khs/(p.phs + 1))*AM.softpos(abs(x1_) - p.ghs, p.epshs)^(p.phs + 1) +
              (p.N/2)*0.5*p.ke*(x1_ - x2_)^2 + (p.N/2)*(p.kw/(p.pw + 1))*d^(p.pw + 1)
         E[i] = KE + Vm + q_^2/(2*Wd.Ct[i])
         qd = (p.Vbias - q_/Wd.Ct[i])/p.Rload
@@ -1097,7 +1124,7 @@ function ledger_exp(Wd, p)
     thru = maximum(abs.(E)) + maximum(abs, Pn)*(Wd.t[end] - Wd.t[1])
     return resid/thru
 end
- 
+
 function experiment_metrics(sol_, p; label = "")
     Wf  = sample_window(sol_, p, sol_.t[1], sol_.t[end]; dt = 2e-6)
     inc = Wf.pen .> 0
@@ -1140,7 +1167,7 @@ function experiment_metrics(sol_, p; label = "")
     return (; label, engaged = true, onset = onset*1e3, duty, hold = hold_ms,
               maxpen, e_eff, f_c, Vpk, Vdc, ledg, rej, latch)
 end
- 
+
 function print_exp_header()
     @printf("%-22s | eng | onset  | duty  | hold  | maxpen |  e_eff | f_c    | Vpk   | Vdc    | ledger  | rej   | latch\n",
             "experiment")
@@ -1152,7 +1179,7 @@ function print_exp_row(m)
             m.label, m.engaged ? "Y" : "n", m.onset, m.duty, m.hold, m.maxpen,
             m.e_eff, m.f_c, m.Vpk, m.Vdc, m.ledg, m.rej, m.latch ? "YES" : "no")
 end
- 
+
 # ---- driver: fresh params, single-knob modification, rebuild, solve, measure ----
 function run_experiment(label; mod! = (pp -> nothing), keepsol = false, alg = Rodas5P())
     pp = Params{Float64}()
@@ -1165,16 +1192,16 @@ function run_experiment(label; mod! = (pp -> nothing), keepsol = false, alg = Ro
     print_exp_row(m)
     return keepsol ? (m, se, pp) : (m, nothing, pp)
 end
- 
+
 println("\n================== EXPERIMENT HARNESS (alpha = ", alpha, ", t_exp = ", t_exp, " s) ==================")
 print_exp_header()
- 
+
 # Pass 1: invariance -- the main run above, measured with the same instrument,
 # then a fresh default build. The two rows must agree to plotting precision.
 m_main = experiment_metrics(sol, p_new; label = "main run (above)")
 print_exp_row(m_main)
 mB, sB, pB = run_experiment("baseline (fresh build)"; keepsol = true)
- 
+
 # Pass 2: capacitance A/B with the pre-registered latch prediction
 mR, sR, pR = run_experiment("cap_model = :ramp";
                             mod! = pp -> (pp.cap_model = :ramp), keepsol = true)
@@ -1185,7 +1212,7 @@ Rc  = (pR.k1*pR.gp + pR.m1*alpha*g)/(pR.k1 + (pR.N/2)*pR.ke)
 println(mR.latch ?
     "[A/B verdict] LATCH observed (hold $(round(mR.hold; digits=2)) ms) -- prediction CONFIRMED; ramp branch dynamically self-refutes." :
     "[A/B verdict] NO latch (hold $(round(mR.hold; digits=2)) ms) -- prediction REFUTED; report this table back for investigation.")
- 
+
 # Pass 3: window study, one knob at a time (v3 capacitance throughout)
 println()
 mW3, _, _  = run_experiment("Wfac = 0.3";    mod! = pp -> (pp.Wfac = 0.3))
@@ -1194,11 +1221,11 @@ mH8, _, _  = run_experiment("h_eff = 80 nm"; mod! = pp -> (pp.h_eff = 80e-9))
 mH10, _, _ = run_experiment("h_eff = 100 nm";mod! = pp -> (pp.h_eff = 100e-9))
 mK3, _, _  = run_experiment("kw = 3e6";      mod! = pp -> (pp.kw = 3e6))
 mK10, sK10, pK10 = run_experiment("kw = 1e7";mod! = pp -> (pp.kw = 1e7), keepsol = true)
- 
+
 println("\nReading guide: crisper stick-unstick = hold DOWN, e_eff UP, f_c UP at rej <~ 0.1;")
 println("h_eff rows move the adhesion well (duty/hold down, Vpk down is the trade);")
 println("latch discriminator: hold > ", round(0.25*0.5e3/f; digits = 1), " ms. Ledger must stay ~1e-8..1e-7.")
- 
+
 # ---- comparison figures ----
 Td = 1/f
 WzB = sample_window(sB, pB, sB.t[end] - 2*Td, sB.t[end]; dt = 2e-6)
@@ -1225,10 +1252,10 @@ EB !== nothing && plot!(e3, (EB.t .- mB.onset*1e-3) .* 1e6, EB.pen .* 1e9; label
 EW !== nothing && plot!(e3, (EW.t .- mW2.onset*1e-3) .* 1e6, EW.pen .* 1e9; label = "Wfac = 0.2")
 EK !== nothing && plot!(e3, (EK.t .- mK10.onset*1e-3) .* 1e6, EK.pen .* 1e9; label = "kw = 1e7")
 hline!(e3, [0.0]; ls = :dash, lc = :gray, label = ""); display(e3)
- 
+
 end # run_experiments
- 
- 
+
+
 # =========================== MODEL EXPERIMENTS (opt-in, v3.8.1) ==========================
 # Harness rev v3.10: live-parameter echo per run (catches stale-module runs:
 # three consecutive bit-identical tables under 'changed' c1 motivated this);
@@ -1263,7 +1290,7 @@ end # run_experiments
 run_experiments = false
 make_plots = true          # per-experiment 4-panel figure, saved to exp_<tag>.png
 if run_experiments
- 
+
     function experiment_metrics(sol, p)
         Wc  = sample_window(sol, p, sol.t[1], sol.t[end]; dt = 2e-6)
         pen = Wc.pen
@@ -1339,6 +1366,7 @@ if run_experiments
             KE = 0.5*p.m1*v1_^2 + (p.N/2)*0.5*p.m2*v2_^2
             Vm = 0.5*p.k1*x1_^2 + (0.25/4)*p.k3*x1_^4 +
                  (abs(x1_) > p.gss ? 0.5*p.kss*(abs(x1_) - p.gss)^2 : 0.0) +
+                 (p.khs/(p.phs + 1))*AM.softpos(abs(x1_) - p.ghs, p.epshs)^(p.phs + 1) +
                  (p.N/2)*0.5*p.ke*(x1_ - x2_)^2 + (p.N/2)*(p.kw/(p.pw + 1))*d^(p.pw + 1)
             E[i] = KE + Vm + q_^2/(2*We.Ct[i])
             qd = (p.Vbias - q_/We.Ct[i])/p.Rload
@@ -1364,7 +1392,7 @@ if run_experiments
                   eeff, ntap, ttap, fring, lam, ballistic, occW, pkV, Pavg, Vrms,
                   regime, ledg)
     end
- 
+
     results = NamedTuple[]
     function run_experiment(tag; kwargs...)
         pp = AnalyticalModel.Params{Float64}(; kwargs...)
@@ -1426,7 +1454,7 @@ if run_experiments
         end
         return nothing
     end
- 
+
     println("\n================ MODEL EXPERIMENTS (alpha = $(alpha), t_end = $(tspan[2]) s) ================")
     run_experiment("E0 baseline")
     run_experiment("E1 :ramp";     cap_model = :ramp)
@@ -1436,7 +1464,7 @@ if run_experiments
     run_experiment("E5 heff 100n"; h_eff = 100e-9)
     run_experiment("E6 kw 3e6";    kw = 3e6)
     run_experiment("E7 kw 1e7";    kw = 1e7)
- 
+
     # -------- PULL-IN / RELEASE VOLTAGE SWEEP (the real discriminator) --------
     # Release condition: Fe(h_eff; Vb) > ke*Rc  =>  V_PI = Vb*sqrt(ke*Rc/Fe(Vb)).
     # Pre-registered predictions at alpha = 2.8 (Rc ~ 57 nm):
@@ -1455,7 +1483,7 @@ if run_experiments
                 @printf("%-12s %7s\n", r.tag, r.regime)
         end
     end
- 
+
     # -------- FILM-HYPOTHESIS TESTS (ring-in vs ring-out) --------
     # Panels to watch: entry-velocity wiggles (ring-in) and post-episode tails.
     # Pre-registered predictions:
@@ -1473,7 +1501,7 @@ if run_experiments
         run_experiment("F2 vent 0.3"; vent_open = 0.3)
         run_experiment("F3 both";     crot_scale = 10.0, vent_open = 0.3)
     end
- 
+
     println("\n---- comparison (decision metrics) ----")
     @printf("%-14s %7s %8s %10s %10s %8s %9s %7s\n",
             "tag", "duty%", "maxpen", "Lambda", "tap-type", "pkV", "Vrms", "regime")

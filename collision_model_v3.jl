@@ -84,15 +84,22 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
                               # x2dot would be a derivative jump on a manifold
                               # the trajectory crosses constantly)
     # Hard stop (as-fabricated frame contact; v3.10) --------------------------
-    # Microscope imaging shows the soft-stopper's semicircular contact is
-    # partially etched into the shuttle: beyond a small residual clearance the
-    # shuttle meets the frame essentially rigidly. Modeled as a near-rigid
-    # Hertz-like wall at |x1| = ghs (ADJUSTABLE: set from the measured residual
-    # standoff; must satisfy ghs >= gss). Conservative, C1, exact gradient of
-    # its potential -- the ledger stays an exact acceptance test. Inactive
-    # whenever max|x1| < ghs, so results at standard operating points are
-    # unchanged. Caps max|x1| -> caps press force through ke -> raises the
-    # effective pull-in threshold (the observed robustness mechanism).
+    # Microscope imaging (Model_derivations, 'Soft stopper: as-fabricated
+    # geometry') shows each stopper station is a PAIR of collinear cantilever
+    # fibers with rounded contact feet at their facing tips; fiber undersides
+    # and the flanking rigid anchor lands share one flush etch datum, from
+    # which only the feet protrude by the standoff r ~ 7-8 um. Feet engage at
+    # |x1| = gss (soft phase, tip-loaded pair); at |x1| = ghs = gss + r the
+    # face seats on the rigid anchor lands: a hard stop BY CONSTRUCTION (not
+    # an etch defect). Modeled as a near-rigid Hertz-like wall at |x1| = ghs
+    # (ADJUSTABLE: imaged standoff implies ghs ~ gss + 7-8e-6 ~ 21-22 um; the
+    # legacy default 14.3e-6 encodes the superseded 0.3 um story and should
+    # be recalibrated before the stop is exercised; must satisfy ghs >= gss).
+    # Conservative, C1, exact gradient of its potential -- the ledger stays
+    # an exact acceptance test. Inactive whenever max|x1| < ghs, so results
+    # at standard operating points are unchanged. Caps max|x1| -> caps press
+    # force through ke -> raises the effective pull-in threshold (the
+    # observed robustness mechanism, now by design rather than by defect).
     ghs::T = 14.3e-6          # hard-stop engagement position [m]
     khs::T = 1.0e9            # hard-stop stiffness [N/m^(3/2)] (near-rigid)
     phs::T = 1.5              # hard-stop exponent
@@ -181,6 +188,8 @@ function create_params(p::Params{T}; verbose = true) where T<:Real
     # Suspension / stopper spring constants
     p.k1  = (4.0/6.0) * p.E * p.Tf * p.ws^3 / p.Lsp^3
     p.k3  = (18.0/25.0) * p.E * p.Tf * p.ws / p.Lsp^3
+    # kss: fixed-guided 12EI/L^3 per fiber (late-window bound); tip-loaded
+    # PAIR (early window, geometry-consistent) would be kss/2 = 5.83 N/m.
     p.kss = p.E * p.Tf * p.wss^3 / p.Lss^3
 
     # Electrical / contact derived

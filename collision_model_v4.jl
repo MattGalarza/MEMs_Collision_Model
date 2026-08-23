@@ -807,8 +807,38 @@ function Ctotal_for_plot(x2, p)
     return (p.N/2)*(Cvar(Cair_close) + Cvar(Cair_open)) + p.cp
 end
 
+# Original translation equation before the contact model is introduced:
+# h_eff = 0 and the expression is used only up to first contact (u <= 0).
+function Ctotal_original_precontact(u, p)
+    u > 0 && return NaN
+
+    Cvar(Cair) = 1/(2/p.crl + 1/Cair)
+
+    # The closing air-gap capacitance diverges as u -> 0-, so the series
+    # combination approaches the finite two-dielectric limit p.crl/2.
+    Cclose = if iszero(u)
+        p.crl/2
+    else
+        h_close = -u
+        Cair_close = (p.e*p.Tf/p.a)*log1p(p.a*p.Leff/h_close)
+        Cvar(Cair_close)
+    end
+
+    h_open = 2*p.gp + u
+    Cair_open = (p.e*p.Tf/p.a)*log1p(p.a*p.Leff/h_open)
+    Copen = Cvar(Cair_open)
+
+    return (p.N/2)*(Cclose + Copen) + p.cp
+end
+
 function plot_capacitance_progression(p; reachable_u = 60e-9)
     x_full = p.gp + p.a*p.Leff
+
+    C_center   = Ctotal_for_plot(0.0, p)
+    C_contact  = Ctotal_for_plot(p.gp, p)
+    C_reachable = Ctotal_for_plot(p.gp + reachable_u, p)
+    C_full     = Ctotal_for_plot(x_full, p)
+    C_airfree  = (p.N/2)*(p.crl/2) + p.cp
 
     # Full path: center, first contact, and the theoretical closed geometry.
     xg = range(0.0, x_full; length = 2400)
@@ -816,80 +846,456 @@ function plot_capacitance_progression(p; reachable_u = 60e-9)
     pfull = plot(xg .* 1e6, Cg .* 1e12; lw = 2, color = :teal,
                  xlabel = "generalized electrode position x2 (um)",
                  ylabel = "total capacitance Ct (pF)",
-                 title = "Center to theoretical full closure", label = "v3 capacitance")
-    vline!(pfull, [p.gp*1e6]; ls = :dash, color = :black, label = "first contact")
-    hline!(pfull, [((p.N/2)*(p.crl/2) + p.cp)*1e12]; ls = :dot,
-           color = :red, label = "air-free dielectric limit")
+                 title = "(a) Capacitance over the full geometric path",
+                 ylims = (max(0.0, C_center*1e12 - 1.0), 1.10*C_full*1e12),
+                 legend = :topleft, titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8,
+                 label = "finite-gap v3 capacitance")
+    vline!(pfull, [p.gp*1e6]; ls = :dash, color = :black, lw = 1.3,
+           label = @sprintf("first contact: %.2f um", p.gp*1e6))
+    scatter!(pfull, [x_full*1e6], [C_full*1e12]; ms = 5, color = :teal,
+             markerstrokecolor = :teal,
+             label = @sprintf("full closure, h_eff = %.0f nm: %.1f pF",
+                              p.h_eff*1e9, C_full*1e12))
+    # Legend-only reference: plotting the 99 pF line would compress the
+    # finite-gap curve and obscure the center-to-contact behavior.
+    plot!(pfull, [NaN], [NaN]; ls = :dot, lw = 1.5, color = :red,
+          label = @sprintf("air-free limit: %.1f pF (off scale)", C_airfree*1e12))
 
     # Contact zoom: the orange band is the C1 sealing blend and the green band
-    # is the approximately reachable post-contact motion.
-    ug = range(-500e-9, 100e-9; length = 1800)
+    # begins after that blend and ends at the reachable post-contact bound.
+    ug = range(-200e-9, 100e-9; length = 1800)
     Cz = [AM.electrostatic(0.0, p.gp + u, 0.0, p)[1] for u in ug]
     pzoom = plot(ug .* 1e9, Cz .* 1e12; lw = 2, color = :teal,
                  xlabel = "u = x2 - gp (nm)", ylabel = "total capacitance Ct (pF)",
-                 title = "Translation-to-collision transition", label = "v3 capacitance")
+                 title = "(b) Capacitance through first contact",
+                 legend = :bottomright, titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8,
+                 label = "v3 capacitance")
     vspan!(pzoom, [-p.W, p.W] .* 1e9; alpha = 0.12, color = :orange,
            label = "sealing blend")
-    vspan!(pzoom, [0.0, reachable_u] .* 1e9; alpha = 0.10, color = :green,
-           label = "reachable collision")
-    vline!(pzoom, [0.0]; ls = :dash, color = :black, label = "first contact")
+    if reachable_u > p.W
+        vspan!(pzoom, [p.W, reachable_u] .* 1e9; alpha = 0.10, color = :green,
+               label = "reachable post-blend motion")
+    end
+    vline!(pzoom, [0.0]; ls = :dash, color = :black, lw = 1.3,
+           label = "first contact")
+    vline!(pzoom, [reachable_u*1e9]; ls = :dot, color = :green, lw = 1.5,
+           label = @sprintf("reachable bound: %.0f nm", reachable_u*1e9))
 
-    fig = plot(pfull, pzoom; layout = (1, 2), size = (1200, 480), dpi = 300)
+    fig = plot(pfull, pzoom; layout = (1, 2), size = (1200, 620), dpi = 600,
+               left_margin = 6Plots.mm, right_margin = 3Plots.mm,
+               bottom_margin = 8Plots.mm, top_margin = 2Plots.mm)
     display(fig)
 
     @printf("Capacitance landmarks: center %.3f pF, contact %.3f pF, reachable %.3f pF, full closure %.3f pF\n",
-            Ctotal_for_plot(0.0, p)*1e12,
-            Ctotal_for_plot(p.gp, p)*1e12,
-            Ctotal_for_plot(p.gp + reachable_u, p)*1e12,
-            Ctotal_for_plot(x_full, p)*1e12)
+            C_center*1e12, C_contact*1e12, C_reachable*1e12, C_full*1e12)
     return fig
 end
 
-savefig(capacitance_progression, "capacitance_progression.pdf")
+capacitance_progression = plot_capacitance_progression(p_new)
+savefig(capacitance_progression,
+        joinpath(@__DIR__, "capacitance_progression.pdf"))
 
-# ---- capacitance review: monotonicity at the seam + deep-wrap asymptotes ----
-# Characterization-only helper: the paper/v2 branch capacitance (Cmin/Cmax ramp)
-function C_paper(x2, p)
-    Cmin = 7.105299639935359e-14
-    Cmax = 9.95200974248769e-11
-    kk   = 2*p.Tp/(p.a*p.Leff)
-    if abs(x2) < p.gp
-        Cair_r = (p.e*p.Tf/p.a)*log((p.gp - x2 + p.a*p.Leff)/(p.gp - x2))
-        Cair_l = (p.e*p.Tf/p.a)*log((p.gp + x2 + p.a*p.Leff)/(p.gp + x2))
-        return (p.N/2)*(1/(2/p.crl + 1/Cair_r) + 1/(2/p.crl + 1/Cair_l)) + p.cp
-    else
-        u   = abs(x2) - p.gp
-        Cc  = Cmin + (Cmax - Cmin)*log(1 + kk*u)/log(1 + kk*p.a*p.Leff)
-        Cnc = (p.e*p.Tf/p.a)*log((p.gp + abs(x2) + p.a*p.Leff)/(p.gp + abs(x2)))
-        return (p.N/2)*(1/(2/p.crl + 1/Cc) + 1/(2/p.crl + 1/Cnc)) + p.cp
+# ---- capacitance sensitivity to the residual pressed-contact gap h_eff ----
+function plot_capacitance_heff_comparison(
+    p;
+    heff_values_nm = [10.0, 25.0, 50.0, 75.0, 100.0],
+    reachable_u = 60e-9,
+)
+    heff_values_nm = sort(unique(Float64.(collect(heff_values_nm))))
+    isempty(heff_values_nm) && error("heff_values_nm must contain at least one value")
+    any(h -> h <= 0, heff_values_nm) && error("all h_eff values must be positive")
+
+    # Only capacitance quantities affected by h_eff are updated. Rebuilding the
+    # Reynolds damping tables is unnecessary for this characterization plot.
+    cases = map(heff_values_nm) do hnm
+        q = deepcopy(p)
+        q.h_eff = hnm*1e-9
+        q.W = q.Wfac*q.h_eff
+        q.cap_model = :v3
+        q
     end
+
+    x_full = p.gp + p.a*p.Leff
+    xg = range(0.0, x_full; length = 2400)
+    ug = range(-200e-9, 100e-9; length = 1800)
+    # Log spacing resolves the rapid rise of the original h_eff = 0 equation
+    # near collision without adding its off-scale endpoint to the plotted data.
+    ug_original = -exp.(range(log(200e-9), log(0.05e-9); length = 1200))
+    C_original = [Ctotal_original_precontact(u, p) for u in ug_original]
+    C_original_limit = Ctotal_original_precontact(0.0, p)
+    full_curves = [[Ctotal_for_plot(x, q) for x in xg] for q in cases]
+    zoom_curves = [[AM.electrostatic(0.0, q.gp + u, 0.0, q)[1] for u in ug]
+                   for q in cases]
+
+    colors = palette(:viridis, length(cases))
+    Cmin_pF = minimum(minimum.(full_curves))*1e12
+    Cmax_pF = maximum(maximum.(full_curves))*1e12
+
+    pfull = plot(; xlabel = "generalized electrode position x2 (um)",
+                 ylabel = "total capacitance Ct (pF)",
+                 title = "(a) Full-path sensitivity to h_eff",
+                 ylims = (max(0.0, Cmin_pF - 1.0), 1.08*Cmax_pF),
+                 legend = :topleft, titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8)
+    pzoom = plot(; xlabel = "u = x2 - gp (nm)",
+                 ylabel = "total capacitance Ct (pF)",
+                 title = "(b) Contact-transition sensitivity to h_eff",
+                 legend = :topleft, titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8)
+
+    baseline_nm = p.h_eff*1e9
+    for i in eachindex(cases)
+        hnm = heff_values_nm[i]
+        isbaseline = isapprox(hnm, baseline_nm; atol = 1e-9, rtol = 0.0)
+        lw = isbaseline ? 3.0 : 1.8
+        label = @sprintf("h_eff = %.0f nm%s", hnm,
+                         isbaseline ? " (baseline)" : "")
+
+        plot!(pfull, xg .* 1e6, full_curves[i] .* 1e12;
+              color = colors[i], lw = lw, label = label)
+        scatter!(pfull, [x_full*1e6], [last(full_curves[i])*1e12];
+                 color = colors[i], markerstrokecolor = colors[i], ms = 3,
+                 label = "")
+        plot!(pzoom, ug .* 1e9, zoom_curves[i] .* 1e12;
+              color = colors[i], lw = lw, label = "")
+    end
+
+    # Original equation: valid only before collision. Its exact u -> 0 limit
+    # is reported in the legend instead of plotted, preserving the zoom scale.
+    plot!(pzoom, ug_original .* 1e9, C_original .* 1e12;
+          color = :black, ls = :dash, lw = 2.2,
+          label = "original pre-contact (h_eff -> 0)")
+    plot!(pzoom, [NaN], [NaN]; color = :red, ls = :dot, lw = 1.5,
+          label = @sprintf("u -> 0 limit: %.1f pF (off scale)",
+                           C_original_limit*1e12))
+
+    vline!(pfull, [p.gp*1e6]; color = :black, ls = :dash, lw = 1.3,
+           label = "first contact")
+    vline!(pzoom, [0.0]; color = :black, ls = :dash, lw = 1.3, label = "")
+    vline!(pzoom, [reachable_u*1e9]; color = :green, ls = :dot, lw = 1.5,
+           label = "")
+
+    fig = plot(pfull, pzoom; layout = (1, 2), size = (1200, 620), dpi = 600,
+               left_margin = 6Plots.mm, right_margin = 3Plots.mm,
+               bottom_margin = 8Plots.mm, top_margin = 2Plots.mm)
+    display(fig)
+    return fig
 end
 
-# (i) seam window: is C monotone? (answers the "up then down" reading directly)
-useam2 = range(-3e-7, 3e-7; length = 2001)
-Cv3_s  = [AM.electrostatic(0.0, p_new.gp + u, 0.0, p_new)[1] for u in useam2]
-Cpp_s  = [C_paper(p_new.gp + u, p_new) for u in useam2]
-cc1 = plot(useam2 .* 1e9, Cv3_s .* 1e12; lw = 1.4, label = "v3 (wedge + blend)",
-           xlabel = "u = x2 - gp (nm)", ylabel = "C_total (pF)",
-           title = "C at the seam: both models MONOTONE (the up/down is Fe, i.e. dC)")
-plot!(cc1, useam2 .* 1e9, Cpp_s .* 1e12; lw = 1.2, ls = :dash, label = "paper Cmin/Cmax branches")
-vspan!(cc1, [-p_new.W*1e9, p_new.W*1e9]; alpha = 0.12, color = :orange, label = "sealing blend")
-display(cc1)
+capacitance_heff_comparison = plot_capacitance_heff_comparison(p_new)
+savefig(capacitance_heff_comparison,
+        joinpath(@__DIR__, "capacitance_heff_comparison.pdf"))
 
-# (ii) deep-wrap comparison: asymptote set by the PRESSED-contact residual gap
-uw = range(1e-9, p_new.a*p_new.Leff*0.999; length = 1200)
-Cv3_w = [AM.electrostatic(0.0, p_new.gp + u, 0.0, p_new)[1] for u in uw]
-Cpp_w = [C_paper(p_new.gp + u, p_new) for u in uw]
-Ccrl_limit = (p_new.N/2)*(p_new.crl/2) + p_new.cp     # air gap -> 0 idealization
-cc2 = plot(uw .* 1e6, Cv3_w .* 1e12; lw = 1.4, label = "v3 (pressed gap = h_eff)",
-           xlabel = "root advance u (um)", ylabel = "C_total (pF)",
-           title = "Deep wrap: monotone rise; asymptote = pressed-contact air gap")
-plot!(cc2, uw .* 1e6, Cpp_w .* 1e12; lw = 1.2, ls = :dash, label = "paper Cmin/Cmax ramp")
-hline!(cc2, [Ccrl_limit*1e12]; ls = :dot, lc = :red,
-       label = "dielectric-only limit (pressed gap -> 0)")
-vspan!(cc2, [0.0, 0.06]; alpha = 0.18, color = :green,
-       label = "dynamically reachable (u <= ~60 nm)")
-display(cc2)
+# ======================== PUBLICATION FORCE CHARACTERIZATION =========================
+# Reapply the global journal defaults before constructing the PDF figures below.
+set_journal_theme()
+
+# Stable continuation of the v3 electrostatic force to theoretical full closure.
+# The simulation itself retains the a_min safeguard in AM.crot; this helper is
+# used only by the full-path characterization plot.
+function electrostatic_force_for_plot(x2, p)
+    u = x2 - p.gp
+    u <= p.W && return AM.electrostatic(0.0, x2, 0.0, p)[2]
+
+    u = clamp(u, 0.0, p.a*p.Leff)
+    eta = (p.a*p.Leff - u)/p.h_eff
+    phi = abs(eta) < 1e-8 ? 1.0 : log1p(eta)/eta
+    slope_factor = if abs(eta) < 1e-6
+        0.5 - (2/3)*eta + (3/4)*eta^2
+    else
+        (log1p(eta) - eta/(1 + eta))/eta^2
+    end
+
+    Cair_close = (p.e*p.Tf*p.Leff/p.h_eff)*phi
+    dCair_close = (p.e*p.Tf*p.Leff/p.h_eff^2)*slope_factor
+
+    h_open = p.gp + x2 + p.h_eff
+    Cair_open = (p.e*p.Tf/p.a)*log1p(p.a*p.Leff/h_open)
+    dCair_open = -p.e*p.Tf*p.Leff/(h_open*(h_open + p.a*p.Leff))
+
+    Cseries(Cair) = 1/(2/p.crl + 1/Cair)
+    Cclose = Cseries(Cair_close)
+    Copen = Cseries(Cair_open)
+    dCclose = (Cclose/Cair_close)^2*dCair_close
+    dCopen = (Copen/Cair_open)^2*dCair_open
+
+    # Per-electrode force at the equilibrated capacitor voltage Vc = Vbias.
+    return 0.5*p.Vbias^2*(dCclose + dCopen)
+end
+
+# Original h_eff = 0 translation equation. It is valid only for u < 0 and
+# diverges as collision is approached, even though capacitance remains bounded.
+function electrostatic_force_original_precontact(u, p)
+    u >= 0 && return Inf
+
+    h_close = -u
+    Cair_close = (p.e*p.Tf/p.a)*log1p(p.a*p.Leff/h_close)
+    dCair_close = p.e*p.Tf*p.Leff/
+                     (h_close*(h_close + p.a*p.Leff))
+
+    h_open = 2*p.gp + u
+    Cair_open = (p.e*p.Tf/p.a)*log1p(p.a*p.Leff/h_open)
+    dCair_open = -p.e*p.Tf*p.Leff/
+                    (h_open*(h_open + p.a*p.Leff))
+
+    Cseries(Cair) = 1/(2/p.crl + 1/Cair)
+    Cclose = Cseries(Cair_close)
+    Copen = Cseries(Cair_open)
+    dCclose = (Cclose/Cair_close)^2*dCair_close
+    dCopen = (Copen/Cair_open)^2*dCair_open
+    return 0.5*p.Vbias^2*(dCclose + dCopen)
+end
+
+function plot_electrostatic_force_heff_comparison(
+    p;
+    heff_values_nm = [10.0, 25.0, 50.0, 75.0, 100.0],
+    reachable_u = 60e-9,
+)
+    heff_values_nm = sort(unique(Float64.(collect(heff_values_nm))))
+    isempty(heff_values_nm) && error("heff_values_nm must contain at least one value")
+    any(h -> h <= 0, heff_values_nm) && error("all h_eff values must be positive")
+
+    cases = map(heff_values_nm) do hnm
+        q = deepcopy(p)
+        q.h_eff = hnm*1e-9
+        q.W = q.Wfac*q.h_eff
+        q.cap_model = :v3
+        q
+    end
+
+    x_full = p.gp + p.a*p.Leff
+    xg = range(0.0, x_full; length = 2400)
+    ug = range(-200e-9, 100e-9; length = 1800)
+    # The singular original curve is stopped 5 nm before contact. Its legend
+    # states the exact limiting behavior without destroying the useful scale.
+    ug_original = -exp.(range(log(200e-9), log(5e-9); length = 800))
+
+    full_curves = [[electrostatic_force_for_plot(x, q) for x in xg]
+                   for q in cases]
+    zoom_curves = [[AM.electrostatic(0.0, q.gp + u, 0.0, q)[2] for u in ug]
+                   for q in cases]
+    original_curve = [electrostatic_force_original_precontact(u, p)
+                      for u in ug_original]
+
+    colors = palette(:viridis, length(cases))
+    Fmax_uN = maximum(maximum.(full_curves))*1e6
+    Fzoom_uN = max(maximum(maximum.(zoom_curves)), maximum(original_curve))*1e6
+
+    pfull = plot(; xlabel = "generalized electrode position x2 (um)",
+                 ylabel = "electrostatic force Fe (uN per electrode)",
+                 title = "(a) Full-path electrostatic-force sensitivity",
+                 ylims = (0.0, 1.08*Fmax_uN), legend = :topleft,
+                 titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8)
+    pzoom = plot(; xlabel = "u = x2 - gp (nm)",
+                 ylabel = "electrostatic force Fe (uN per electrode)",
+                 title = "(b) Electrostatic force through first contact",
+                 ylims = (0.0, 1.08*Fzoom_uN), legend = :topleft,
+                 titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8)
+
+    baseline_nm = p.h_eff*1e9
+    for i in eachindex(cases)
+        hnm = heff_values_nm[i]
+        isbaseline = isapprox(hnm, baseline_nm; atol = 1e-9, rtol = 0.0)
+        lw = isbaseline ? 3.0 : 1.8
+        label = @sprintf("h_eff = %.0f nm%s", hnm,
+                         isbaseline ? " (baseline)" : "")
+        plot!(pfull, xg .* 1e6, full_curves[i] .* 1e6;
+              color = colors[i], lw = lw, label = label)
+        plot!(pzoom, ug .* 1e9, zoom_curves[i] .* 1e6;
+              color = colors[i], lw = lw, label = "")
+    end
+
+    plot!(pzoom, ug_original .* 1e9, original_curve .* 1e6;
+          color = :black, ls = :dash, lw = 2.2,
+          label = "original pre-contact: h_eff -> 0 (diverges)")
+    vline!(pfull, [p.gp*1e6]; color = :black, ls = :dash, lw = 1.3,
+           label = "first contact")
+    vline!(pzoom, [0.0]; color = :black, ls = :dash, lw = 1.3, label = "")
+    vline!(pzoom, [reachable_u*1e9]; color = :green, ls = :dot,
+           lw = 1.5, label = "")
+
+    fig = plot(pfull, pzoom; layout = (1, 2), size = (1200, 620), dpi = 600,
+               left_margin = 6Plots.mm, right_margin = 3Plots.mm,
+               bottom_margin = 8Plots.mm, top_margin = 2Plots.mm)
+    display(fig)
+    return fig
+end
+
+electrostatic_force_heff_comparison =
+    plot_electrostatic_force_heff_comparison(p_new)
+savefig(electrostatic_force_heff_comparison,
+        joinpath(@__DIR__, "electrostatic_force_heff_comparison.pdf"))
+
+# Soft-stopper component only; the separate Hertz-like hard-stop force is not
+# included so the compliant engagement law remains visible.
+function soft_stopper_component(x1, p)
+    abs(x1) <= p.gss && return 0.0
+    return -p.kss*(abs(x1) - p.gss)*sign(x1)
+end
+
+function plot_soft_stopper_force(p)
+    p.ghs < p.gss && error("ghs must be greater than or equal to gss")
+    compliant_travel = p.ghs - p.gss
+    zoom_margin = max(0.25*compliant_travel, 0.10e-6)
+
+    xg = range(-p.ghs, p.ghs; length = 1800)
+    Fss = [soft_stopper_component(x, p) for x in xg]
+    dg = range(-zoom_margin, compliant_travel; length = 900)
+    Fmag = p.kss .* max.(dg, 0.0)
+
+    pfull = plot(xg .* 1e6, Fss .* 1e6; color = :teal, lw = 2.2,
+                 xlabel = "shuttle displacement x1 (um)",
+                 ylabel = "soft-stopper force Fss (uN)",
+                 title = "(a) Symmetric soft-stopper force law",
+                 label = "compliant stopper force", legend = :topleft,
+                 titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8)
+    vline!(pfull, [-p.gss*1e6, p.gss*1e6]; color = :black,
+           ls = :dash, lw = 1.3, label = "foot engagement")
+    vline!(pfull, [-p.ghs*1e6, p.ghs*1e6]; color = :red,
+           ls = :dot, lw = 1.5, label = "hard-stop seating")
+
+    pzoom = plot(dg .* 1e6, Fmag .* 1e6; color = :teal, lw = 2.2,
+                 xlabel = "stopper overtravel |x1| - gss (um)",
+                 ylabel = "restoring-force magnitude (uN)",
+                 title = "(b) Compliant engagement window",
+                 label = @sprintf("slope kss = %.2f N/m", p.kss),
+                 legend = :topleft, titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8)
+    vspan!(pzoom, [-zoom_margin, 0.0] .* 1e6; color = :gray,
+           alpha = 0.08, label = "inactive")
+    vspan!(pzoom, [0.0, compliant_travel] .* 1e6; color = :orange,
+           alpha = 0.10, label = "soft-stop loading")
+    vline!(pzoom, [0.0]; color = :black, ls = :dash, lw = 1.3, label = "")
+    vline!(pzoom, [compliant_travel*1e6]; color = :red,
+           ls = :dot, lw = 1.5, label = "hard-stop onset")
+
+    fig = plot(pfull, pzoom; layout = (1, 2), size = (1200, 620), dpi = 600,
+               left_margin = 6Plots.mm, right_margin = 3Plots.mm,
+               bottom_margin = 8Plots.mm, top_margin = 2Plots.mm)
+    display(fig)
+    return fig
+end
+
+soft_stopper_force_plot = plot_soft_stopper_force(p_new)
+savefig(soft_stopper_force_plot,
+        joinpath(@__DIR__, "soft_stopper_force.pdf"))
+
+function plot_beam_bending_force(p)
+    xg = range(-p.gss, p.gss; length = 1800)
+    Flinear = -p.k1 .* xg
+    Fnonlinear = -0.25*p.k3 .* xg.^3
+    Ftotal = Flinear .+ Fnonlinear
+
+    pfull = plot(xg .* 1e6, Ftotal .* 1e6; color = :black, lw = 2.8,
+                 xlabel = "shuttle displacement x1 (um)",
+                 ylabel = "beam restoring force (uN)",
+                 title = "(a) Suspension beam force decomposition",
+                 label = "linear + cubic", legend = :topleft,
+                 titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8)
+    plot!(pfull, xg .* 1e6, Flinear .* 1e6; color = :teal,
+          lw = 2.0, ls = :dash, label = "linear: -k1 x1")
+    plot!(pfull, xg .* 1e6, Fnonlinear .* 1e6; color = :orange,
+          lw = 2.0, ls = :dot, label = "cubic: -(k3/4) x1^3")
+    vline!(pfull, [-p.gss*1e6, p.gss*1e6]; color = :gray,
+           ls = :dash, lw = 1.2, label = "soft-stop engagement")
+
+    xmin = max(0.10e-6, p.gss/200)
+    xa = range(xmin, p.gss; length = 1000)
+    Flin_mag = p.k1 .* xa
+    Fnl_mag = 0.25*p.k3 .* xa.^3
+    Fsum_mag = Flin_mag .+ Fnl_mag
+    nonlinear_share = 100*last(Fnl_mag)/last(Fsum_mag)
+
+    pscale = plot(xa .* 1e6, Fsum_mag .* 1e6; color = :black, lw = 2.8,
+                  xscale = :log10, yscale = :log10,
+                  xlabel = "displacement magnitude |x1| (um)",
+                  ylabel = "restoring-force magnitude (uN)",
+                  title = "(b) Linear and cubic scaling before engagement",
+                  label = "total", legend = :topleft,
+                  titlefontsize = 12, guidefontsize = 11,
+                  tickfontsize = 10, legendfontsize = 8)
+    plot!(pscale, xa .* 1e6, Flin_mag .* 1e6; color = :teal,
+          lw = 2.0, ls = :dash, label = "linear component")
+    plot!(pscale, xa .* 1e6, Fnl_mag .* 1e6; color = :orange,
+          lw = 2.0, ls = :dot,
+          label = @sprintf("cubic component (%.1f%% at gss)", nonlinear_share))
+
+    fig = plot(pfull, pscale; layout = (1, 2), size = (1200, 620), dpi = 600,
+               left_margin = 6Plots.mm, right_margin = 3Plots.mm,
+               bottom_margin = 8Plots.mm, top_margin = 2Plots.mm)
+    display(fig)
+    return fig
+end
+
+beam_bending_force_plot = plot_beam_bending_force(p_new)
+savefig(beam_bending_force_plot,
+        joinpath(@__DIR__, "beam_bending_force.pdf"))
+
+function plot_damping_force_characterization(
+    p;
+    speeds_mm_s = [5.0, 10.0, 20.0],
+    reachable_u = 60e-9,
+)
+    speeds_mm_s = sort(unique(Float64.(collect(speeds_mm_s))))
+    isempty(speeds_mm_s) && error("speeds_mm_s must contain at least one value")
+    any(v -> v <= 0, speeds_mm_s) && error("closing speeds must be positive")
+    speeds = speeds_mm_s .* 1e-3
+
+    xg = range(0.0, p.gp + reachable_u; length = 2200)
+    ug = range(-200e-9, 100e-9; length = 1800)
+    full_curves = [[abs(AM.damping(0.0, 0.0, x, v, p)) for x in xg]
+                   for v in speeds]
+    zoom_curves = [[abs(AM.damping(0.0, 0.0, p.gp + u, v, p)) for u in ug]
+                   for v in speeds]
+    colors = palette(:viridis, length(speeds))
+
+    pfull = plot(; xlabel = "generalized electrode position x2 (um)",
+                 ylabel = "damping-force magnitude |Fd| (uN)",
+                 title = "(a) Closing-stroke squeeze-film force",
+                 legend = :topleft, titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10, legendfontsize = 8)
+    pzoom = plot(; xlabel = "u = x2 - gp (nm)",
+                 ylabel = "damping-force magnitude |Fd| (uN)",
+                 title = "(b) Damping force through first contact",
+                 legend = false, titlefontsize = 12, guidefontsize = 11,
+                 tickfontsize = 10)
+
+    for i in eachindex(speeds)
+        label = @sprintf("closing speed = %.0f mm/s", speeds_mm_s[i])
+        plot!(pfull, xg .* 1e6, full_curves[i] .* 1e6;
+              color = colors[i], lw = 2.0, label = label)
+        plot!(pzoom, ug .* 1e9, zoom_curves[i] .* 1e6;
+              color = colors[i], lw = 2.0, label = "")
+    end
+
+    vline!(pfull, [p.gp*1e6]; color = :black, ls = :dash,
+           lw = 1.3, label = "first contact")
+    vspan!(pzoom, [-p.W, p.W] .* 1e9; alpha = 0.10,
+           color = :orange, label = "")
+    if reachable_u > p.W
+        vspan!(pzoom, [p.W, reachable_u] .* 1e9; alpha = 0.08,
+               color = :green, label = "")
+    end
+    vline!(pzoom, [0.0]; color = :black, ls = :dash, lw = 1.3, label = "")
+    vline!(pzoom, [reachable_u*1e9]; color = :green, ls = :dot,
+           lw = 1.5, label = "")
+
+    fig = plot(pfull, pzoom; layout = (1, 2), size = (1200, 620), dpi = 600,
+               left_margin = 6Plots.mm, right_margin = 3Plots.mm,
+               bottom_margin = 8Plots.mm, top_margin = 2Plots.mm)
+    display(fig)
+    return fig
+end
+
+damping_force_plot = plot_damping_force_characterization(p_new)
+savefig(damping_force_plot,
+        joinpath(@__DIR__, "damping_force.pdf"))
 
 # ==================== (2)+(3) TWO-CYCLE ZOOMS AND COMPOSITE PANELS =======================
 Tdrive = 1/f
@@ -1582,480 +1988,3 @@ if run_experiments
                 1e3*r.pkV, 1e3*r.Vrms, r.regime)
     end
 end
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-"""
-    CapacitanceTransitionPlots
-
-Plotting add-on for `collision_model_v3.jl`.
-
-This file does not solve the ODE. It uses the existing `AnalyticalModel`
-constitutive functions and a completed parameter object (`p_new`) to create a
-four-panel characterization figure spanning:
-
-1. center-to-contact translation,
-2. the nanometer-scale sealing transition,
-3. post-contact rotation through the theoretical geometric closure, and
-4. the associated quasi-static electrostatic force near contact.
-
-Typical use at the bottom of `collision_model_v3.jl`:
-
-    include("capacitance_transition_plots.jl")
-    using .CapacitanceTransitionPlots
-
-    cap_result = make_capacitance_transition_figure(
-        p_new, AnalyticalModel;
-        reachable_u = 60e-9,
-        capacitor_voltage = p_new.Vbias,
-        savepath = "capacitance_transition.pdf",
-    )
-
-The returned named tuple contains `figure` and `landmarks`.
-"""
-module CapacitanceTransitionPlots
-
-using Plots
-using Printf
-
-export make_capacitance_transition_figure,
-       capacitance_landmarks,
-       print_capacitance_landmarks
-
-# -----------------------------------------------------------------------------
-# Stable characterization formulas
-# -----------------------------------------------------------------------------
-
-@inline _series_capacitance(Cair, p) = inv(2 / p.crl + inv(Cair))
-
-"""
-Numerically stable evaluation of log(1+z)/z, including its removable limit at
-z = 0. The series is used only very close to zero.
-"""
-@inline function _log1p_over_x(z)
-    abs(z) < 1e-6 && return 1 - z / 2 + z^2 / 3 - z^3 / 4 + z^4 / 5
-    return log1p(z) / z
-end
-
-"""
-Air capacitance of a tapered gap with minimum gap `h0` and fixed taper `p.a`.
-This is used for the non-contacting side during the deep-rotation plot.
-"""
-@inline function _cair_pre_from_gap(h0, p)
-    return (p.e * p.Tf / p.a) * log1p(p.a * p.Leff / h0)
-end
-
-"""
-Geometry-derived post-contact air capacitance for 0 <= u <= a*Leff.
-
-Writing the expression in terms of
-
-    eta = (a*Leff - u)/h_eff
-
-removes the apparent 0/0 singularity at full geometric closure. At
-u = a*Leff, the exact limit is e*Tf*Leff/h_eff.
-"""
-@inline function _cair_post_exact(u, p)
-    u_clamped = clamp(u, zero(u), p.a * p.Leff)
-    eta = (p.a * p.Leff - u_clamped) / p.h_eff
-    scale = p.e * p.Tf * p.Leff / p.h_eff
-    return scale * _log1p_over_x(eta)
-end
-
-"""
-Total circuit capacitance used for the theoretical post-contact plot.
-
-The production model is retained through the sealing layer so that the plotted
-curve exactly shows the implemented C1 blend. Beyond that layer, the stable
-post-contact expression is used so that the curve reaches the true geometric
-endpoint instead of the solver safeguard `a_min`.
-"""
-function _ct_derived_plot(x2, p, AM)
-    u = x2 - p.gp
-
-    if u <= p.W
-        return AM.electrostatic(0.0, x2, 0.0, p)[1]
-    end
-
-    Cclose_air = _cair_post_exact(u, p)
-    # For positive x2, the opposite gap opens to gp + x2. The same residual
-    # gap convention used by the production model is retained here.
-    Copen_air = _cair_pre_from_gap(p.gp + x2 + p.h_eff, p)
-
-    Cclose = _series_capacitance(Cclose_air, p)
-    Copen  = _series_capacitance(Copen_air, p)
-    return (p.N / 2) * (Cclose + Copen) + p.cp
-end
-
-"""
-Construct the capacitance and force landmarks used both for annotations and for
-the console summary. Capacitances are returned in farads and forces in newtons.
-"""
-function capacitance_landmarks(p, AM; reachable_u = 60e-9,
-                               capacitor_voltage = p.Vbias)
-    reachable_u < 0 && throw(ArgumentError("reachable_u must be nonnegative"))
-
-    closure_u = p.a * p.Leff
-    reachable_u > closure_u && throw(ArgumentError(
-        "reachable_u must not exceed a*Leff = $(closure_u) m",
-    ))
-
-    x_contact = p.gp
-    x_reachable = p.gp + reachable_u
-    x_full = p.gp + closure_u
-
-    C_center = AM.electrostatic(0.0, 0.0, 0.0, p)[1]
-    C_contact = AM.electrostatic(0.0, x_contact, 0.0, p)[1]
-    C_reachable = _ct_derived_plot(x_reachable, p, AM)
-    C_full_residual_gap = _ct_derived_plot(x_full, p, AM)
-
-    # Air-free limit on the closing side. The open side and parasitic
-    # capacitance are retained so this is a total-circuit reference value.
-    Copen_air_full = _cair_pre_from_gap(p.gp + x_full + p.h_eff, p)
-    Copen_full = _series_capacitance(Copen_air_full, p)
-    C_airfree_limit = (p.N / 2) * (p.crl / 2 + Copen_full) + p.cp
-
-    # Seam-repaired version of the conference-paper ramp already implemented
-    # by cap_model = :ramp in collision_model_v3.jl.
-    p_legacy = deepcopy(p)
-    p_legacy.cap_model = :ramp
-    C_legacy_reachable = AM.electrostatic(
-        0.0, x_reachable, 0.0, p_legacy,
-    )[1]
-    C_legacy_full = AM.electrostatic(0.0, x_full, 0.0, p_legacy)[1]
-
-    # Ideal branch-slope ratio at the seam, prior to the finite-width blend.
-    h = p.h_eff
-    a = p.a
-    L = p.Leff
-    dC_pre_air = (p.e * p.Tf / a) * (1 / h - 1 / (h + a * L))
-    dC_post_air = (p.e * p.Tf / L) * (
-        log1p(a * L / h) / a^2 - L / (a * (h + a * L))
-    )
-    seam_slope_ratio = dC_pre_air / dC_post_air
-
-    Vout_for_voltage = p.Vbias - capacitor_voltage
-    F_contact = AM.electrostatic(
-        0.0, x_contact, Vout_for_voltage, p,
-    )[2]
-    F_reachable = AM.electrostatic(
-        0.0, x_reachable, Vout_for_voltage, p,
-    )[2]
-    F_legacy_reachable = AM.electrostatic(
-        0.0, x_reachable, Vout_for_voltage, p_legacy,
-    )[2]
-
-    return (
-        gp = p.gp,
-        blend_half_width = p.W,
-        closure_u = closure_u,
-        reachable_u = reachable_u,
-        reachable_fraction = reachable_u / closure_u,
-        C_center = C_center,
-        C_contact = C_contact,
-        C_reachable = C_reachable,
-        C_full_residual_gap = C_full_residual_gap,
-        C_airfree_limit = C_airfree_limit,
-        C_legacy_reachable = C_legacy_reachable,
-        C_legacy_full = C_legacy_full,
-        seam_slope_ratio = seam_slope_ratio,
-        capacitor_voltage = capacitor_voltage,
-        F_contact = F_contact,
-        F_reachable = F_reachable,
-        F_legacy_reachable = F_legacy_reachable,
-    )
-end
-
-"""Print the principal numerical landmarks in publication-friendly units."""
-function print_capacitance_landmarks(lm)
-    println("\n--- Capacitance transition landmarks ---")
-    @printf("center-to-contact travel                 : %8.3f um\n", lm.gp * 1e6)
-    @printf("sealing-blend half-width                : %8.3f nm\n", lm.blend_half_width * 1e9)
-    @printf("post-contact travel to geometric closure: %8.3f um\n", lm.closure_u * 1e6)
-    @printf("dynamically reachable post-contact travel: %7.3f nm  (chi = %.5f)\n",
-            lm.reachable_u * 1e9, lm.reachable_fraction)
-    @printf("C_t at center                           : %8.4f pF\n", lm.C_center * 1e12)
-    @printf("C_t at first contact                    : %8.4f pF\n", lm.C_contact * 1e12)
-    @printf("C_t at reachable overtravel             : %8.4f pF\n", lm.C_reachable * 1e12)
-    @printf("legacy-ramp C_t at same overtravel      : %8.4f pF\n", lm.C_legacy_reachable * 1e12)
-    @printf("C_t at full closure, finite h_eff       : %8.4f pF\n", lm.C_full_residual_gap * 1e12)
-    @printf("air-free dielectric limit               : %8.4f pF\n", lm.C_airfree_limit * 1e12)
-    @printf("ideal pre/post air-capacitance slope ratio: %6.2f x\n", lm.seam_slope_ratio)
-    @printf("per-electrode F_e at contact (Vc = %.3f V): %8.4f uN\n",
-            lm.capacitor_voltage, lm.F_contact * 1e6)
-    @printf("per-electrode F_e at reachable u        : %8.4f uN\n", lm.F_reachable * 1e6)
-    @printf("legacy-ramp F_e at reachable u          : %8.4f uN\n", lm.F_legacy_reachable * 1e6)
-    return nothing
-end
-
-# -----------------------------------------------------------------------------
-# Figure construction
-# -----------------------------------------------------------------------------
-
-"""
-    make_capacitance_transition_figure(p, AM; kwargs...)
-
-Create the four-panel capacitance/force characterization figure.
-
-Arguments
----------
-- `p`: completed parameter object, normally `p_new`.
-- `AM`: the existing analytical-model module, normally `AnalyticalModel` or
-  the alias `AM` used by `collision_model_v3.jl`.
-
-Keywords
---------
-- `reachable_u = 60e-9`: maximum dynamically relevant post-contact advance.
-- `capacitor_voltage = p.Vbias`: voltage used only for the quasi-static force
-  panel. The electrical state is chosen so `Vc = Vbias - Vout` equals this.
-- `seam_before = 500e-9`: pre-contact extent of the seam zoom.
-- `seam_after = 100e-9`: post-contact extent of the seam zoom.
-- `show_legacy = true`: overlay the seam-repaired conference-paper ramp.
-- `savepath = nothing`: optional `.pdf` or `.png` output path.
-- `display_figure = true`: display the completed figure immediately.
-
-Returns
--------
-A named tuple `(figure = fig, landmarks = lm)`.
-"""
-function make_capacitance_transition_figure(
-    p,
-    AM;
-    reachable_u = 60e-9,
-    capacitor_voltage = p.Vbias,
-    seam_before = 500e-9,
-    seam_after = 100e-9,
-    show_legacy = true,
-    savepath::Union{Nothing,AbstractString} = nothing,
-    display_figure = true,
-)
-    seam_before <= 0 && throw(ArgumentError("seam_before must be positive"))
-    seam_after <= 0 && throw(ArgumentError("seam_after must be positive"))
-
-    lm = capacitance_landmarks(
-        p, AM;
-        reachable_u = reachable_u,
-        capacitor_voltage = capacitor_voltage,
-    )
-
-    p_legacy = deepcopy(p)
-    p_legacy.cap_model = :ramp
-    Vout_for_voltage = p.Vbias - capacitor_voltage
-
-    derived_color = :teal
-    legacy_color = :gray
-    contact_color = :black
-    blend_color = :orange
-    reachable_color = :green
-    limit_color = :red
-
-    common = (
-        framestyle = :box,
-        grid = false,
-        linewidth = 2.0,
-        tickfontsize = 8,
-        guidefontsize = 10,
-        titlefontsize = 11,
-        legendfontsize = 8,
-    )
-
-    # (a) Translation: center to first contact.
-    x_pre = range(0.0, p.gp; length = 1200)
-    C_pre = [AM.electrostatic(0.0, x, 0.0, p)[1] for x in x_pre]
-    p1 = plot(
-        x_pre .* 1e6,
-        C_pre .* 1e12;
-        color = derived_color,
-        label = "derived model",
-        xlabel = "electrode displacement x2 (um)",
-        ylabel = "total C_t (pF)",
-        title = "(a) Translation: center to first contact",
-        legend = :topleft,
-        common...,
-    )
-    scatter!(p1, [0.0], [lm.C_center * 1e12]; color = derived_color,
-             markersize = 4, label = "")
-    scatter!(p1, [p.gp * 1e6], [lm.C_contact * 1e12];
-             color = contact_color, markersize = 4, label = "")
-    vline!(p1, [p.gp * 1e6]; color = contact_color, linestyle = :dash,
-           linewidth = 1.2, label = "first contact")
-
-    # (b) Nanometer-scale seam zoom.
-    seam_after_plot = max(seam_after, reachable_u)
-    u_seam = range(-seam_before, seam_after_plot; length = 1800)
-    C_seam = [AM.electrostatic(0.0, p.gp + u, 0.0, p)[1] for u in u_seam]
-    C_seam_legacy = [
-        AM.electrostatic(0.0, p.gp + u, 0.0, p_legacy)[1]
-        for u in u_seam
-    ]
-    p2 = plot(
-        u_seam .* 1e9,
-        C_seam .* 1e12;
-        color = derived_color,
-        label = "derived rotation",
-        xlabel = "u = x2 - gp (nm)",
-        ylabel = "total C_t (pF)",
-        title = "(b) Sealing transition and reachable collision",
-        legend = :topleft,
-        common...,
-    )
-    if show_legacy
-        plot!(
-            p2,
-            u_seam .* 1e9,
-            C_seam_legacy .* 1e12;
-            color = legacy_color,
-            linestyle = :dash,
-            linewidth = 1.8,
-            label = "legacy ramp (seam-repaired)",
-        )
-    end
-    vspan!(p2, [-p.W, p.W] .* 1e9; color = blend_color, alpha = 0.10,
-           label = "C1 sealing blend")
-    vspan!(p2, [0.0, reachable_u] .* 1e9; color = reachable_color, alpha = 0.08,
-           label = "reachable post-contact")
-    vline!(p2, [0.0]; color = contact_color, linestyle = :dash,
-           linewidth = 1.1, label = "")
-
-    # (c) Rotation: first contact to full geometric closure.
-    chi = range(0.0, 1.0; length = 1600)
-    u_post = chi .* lm.closure_u
-    x_post = p.gp .+ u_post
-    C_post = [_ct_derived_plot(x, p, AM) for x in x_post]
-    C_post_legacy = [
-        AM.electrostatic(0.0, x, 0.0, p_legacy)[1]
-        for x in x_post
-    ]
-    p3 = plot(
-        chi,
-        C_post .* 1e12;
-        color = derived_color,
-        label = "derived geometry",
-        xlabel = "post-contact closure fraction chi = u/(a Leff)",
-        ylabel = "total C_t (pF)",
-        title = "(c) Rotation to theoretical full closure",
-        legend = :topleft,
-        common...,
-    )
-    if show_legacy
-        plot!(
-            p3,
-            chi,
-            C_post_legacy .* 1e12;
-            color = legacy_color,
-            linestyle = :dash,
-            linewidth = 1.8,
-            label = "legacy ramp (seam-repaired)",
-        )
-    end
-    hline!(p3, [lm.C_airfree_limit * 1e12]; color = limit_color,
-           linestyle = :dot, linewidth = 1.5,
-           label = "air-free dielectric limit")
-    scatter!(p3, [1.0], [lm.C_full_residual_gap * 1e12]; color = derived_color,
-             markersize = 4, label = "full closure with finite h_eff")
-    vspan!(p3, [lm.reachable_fraction, 1.0]; color = :gray, alpha = 0.06,
-           label = "geometric extrapolation")
-    vline!(p3, [lm.reachable_fraction]; color = reachable_color,
-           linestyle = :dash, linewidth = 1.2, label = "reachable boundary")
-
-    # (d) Quasi-static electrostatic force at the same seam scale.
-    F_seam = [
-        abs(AM.electrostatic(0.0, p.gp + u, Vout_for_voltage, p)[2])
-        for u in u_seam
-    ]
-    F_seam_legacy = [
-        abs(AM.electrostatic(0.0, p.gp + u, Vout_for_voltage, p_legacy)[2])
-        for u in u_seam
-    ]
-    # A tiny positive floor protects a logarithmic axis if a parameter choice
-    # produces exact cancellation at one sample.
-    force_floor = eps(Float64)
-    p4 = plot(
-        u_seam .* 1e9,
-        max.(F_seam .* 1e6, force_floor);
-        color = derived_color,
-        label = "derived force",
-        xlabel = "u = x2 - gp (nm)",
-        ylabel = "per-electrode |F_e| (uN)",
-        title = @sprintf("(d) Quasi-static force at Vc = %.3g V", capacitor_voltage),
-        yscale = :log10,
-        legend = :bottomleft,
-        common...,
-    )
-    if show_legacy
-        plot!(
-            p4,
-            u_seam .* 1e9,
-            max.(F_seam_legacy .* 1e6, force_floor);
-            color = legacy_color,
-            linestyle = :dash,
-            linewidth = 1.8,
-            label = "legacy-ramp force",
-        )
-    end
-    vspan!(p4, [-p.W, p.W] .* 1e9; color = blend_color, alpha = 0.10,
-           label = "")
-    vspan!(p4, [0.0, reachable_u] .* 1e9; color = reachable_color, alpha = 0.08,
-           label = "")
-    vline!(p4, [0.0]; color = contact_color, linestyle = :dash,
-           linewidth = 1.1, label = "")
-
-    layout = @layout [a b; c d]
-    fig = plot(
-        p1, p2, p3, p4;
-        layout = layout,
-        size = (1250, 900),
-        dpi = 300,
-        plot_title = "Capacitance and electrostatic coupling across electrode collision",
-        plot_titlefontsize = 14,
-    )
-
-    if savepath !== nothing
-        mkpath(dirname(savepath))
-        savefig(fig, savepath)
-    end
-
-    display_figure && display(fig)
-    print_capacitance_landmarks(lm)
-    return (figure = fig, landmarks = lm)
-end
-
-end # module CapacitanceTransitionPlots
-
-
-cap_result = make_capacitance_transition_figure(
-    p_new, AnalyticalModel;
-    reachable_u = 60e-9,
-    capacitor_voltage = p_new.Vbias,
-    savepath = "capacitance_transition.pdf",
-)

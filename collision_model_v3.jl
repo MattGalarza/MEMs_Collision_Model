@@ -443,7 +443,7 @@ import .AnalyticalModel
 
 # Sine Wave External Force
 f = 20.0        # Frequency (Hz)
-alpha = 4.8     # Applied acceleration constant; contact threshold alpha* = 2.45 +- 0.05
+alpha = 4.95     # Applied acceleration constant; contact threshold alpha* = 2.45 +- 0.05
 g = 9.81        # Gravitational constant (m/s^2)
 A = alpha*g
 t_ramp = 0.2    # Ramp-up duration (s)

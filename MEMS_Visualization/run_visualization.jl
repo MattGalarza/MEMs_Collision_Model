@@ -69,4 +69,4 @@ simulate(kind=:probe,outdir=OUT,tag="probe")
 println("Data complete. Compile figure TeX files with pdflatex from this directory.")
 
 end
-main()
+main() 

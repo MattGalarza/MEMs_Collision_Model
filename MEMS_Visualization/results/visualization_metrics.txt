@@ -1,13 +1,13 @@
-Julia 1.11.7; successful native simulation; unchanged corrected model.
-contact_entry_time_s = 0.3797237597568831
-last_four_cycles_mean_load_power_W = 9.885324571334653e-13
-last_cycle_sampled_max_abs_voltage_V = 0.008612117107515312
-last_cycle_sampled_max_tip_overlap_m = 1.6167595400723905e-8
-last_cycle_sampled_max_abs_beam_deflection_m = 8.30920634922928e-8
-last_cycle_sampled_max_abs_shuttle_m = 1.3809244345920167e-5
-total_film_loss_J = 2.2813295697685755e-9
-total_contact_loss_J = 7.820060188359662e-13
-total_resistor_energy_J = 2.6676289615513706e-13
-energy_residual_over_throughput = 6.662387849306052e-11
+Julia 1.11.6; successful native simulation; unchanged corrected model.
+contact_entry_time_s = 0.3797237597568288
+last_four_cycles_mean_load_power_W = 9.885324572691875e-13
+last_cycle_sampled_max_abs_voltage_V = 0.008612087800748352
+last_cycle_sampled_max_tip_overlap_m = 1.6167493178948075e-8
+last_cycle_sampled_max_abs_beam_deflection_m = 8.309213170734582e-8
+last_cycle_sampled_max_abs_shuttle_m = 1.3809244446929024e-5
+total_film_loss_J = 2.2813295697981857e-9
+total_contact_loss_J = 7.820060174172438e-13
+total_resistor_energy_J = 2.6676289616908957e-13
+energy_residual_over_throughput = 6.722311054290938e-11
 Peak quantities are sampled maxima, not independently optimized extrema.
 Finite reference run, not experimental validation or a stability proof.

@@ -69,4 +69,4 @@ end # module CorrectedMEMS
 
 if abspath(PROGRAM_FILE) == @__FILE__
     CorrectedMEMS.main()
-end
+end 

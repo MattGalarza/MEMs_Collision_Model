@@ -16,7 +16,7 @@
 #   julia --project=. collision_model_corrected.jl --probe | --convergence | --drive
 #
 # From other code (figures, UDE, HDI)
-#   include("collision_model_corrected.jl"); using .CorrectedMEMS
+#   include("collision_model_corrected.jl"); using .CorrectedMEMS 
 #   m   = Model(Params(c1 = 1e-4))                     # rebuild after ANY parameter change
 #   rhs = HarvesterRHS(m, t -> 0.0)                    # f(du, u, theta, t); 5, 12, or 13 states
 #   c   = constitutive(m, x1, x2)                      # (; C, grad, D)

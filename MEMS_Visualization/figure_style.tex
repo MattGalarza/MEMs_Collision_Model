@@ -1,0 +1,21 @@
+\documentclass[10pt]{article}
+\usepackage[paperwidth=11.5in,paperheight=8.3in,margin=0.5in]{geometry}
+\usepackage{amsmath,pgfplots}
+\usepgfplotslibrary{groupplots}
+\pgfplotsset{compat=1.18}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern,microtype}
+\definecolor{teal}{RGB}{0,112,128}
+\definecolor{orange}{RGB}{204,86,36}
+\definecolor{purple}{RGB}{113,80,150}
+\definecolor{grayblue}{RGB}{75,104,128}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\pgfplotsset{every axis/.append style={width=4.95in,height=2.5in,
+ tick label style={font=\small},label style={font=\small},title style={font=\bfseries\small},
+ grid=major,grid style={gray!15},axis line style={gray!55},tick style={gray!55},
+ legend style={font=\footnotesize,draw=none,fill=white,fill opacity=.85,text opacity=1},
+ scaled ticks=false,unbounded coords=jump},
+ tealcurve/.style={teal,thick,no marks},orangecurve/.style={orange,dashed,thick,no marks},
+ purplecurve/.style={purple,thick,no marks},graycurve/.style={grayblue,densely dotted,thick,no marks}}
+\newcommand{\figureheading}[2]{{\LARGE\bfseries #1}\par\vspace{4pt}{\color{grayblue}#2}\par\vspace{10pt}}

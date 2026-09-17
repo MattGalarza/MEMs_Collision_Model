@@ -1,0 +1,18 @@
+\input{figure_style.tex}
+\begin{document}
+\figureheading{A closer look at the final forcing cycle}{Final 50 ms \quad Display retains per-bin extrema and adjacent samples from dense output}
+\begin{tikzpicture}
+\begin{groupplot}[group style={group size=2 by 2,horizontal sep=0.55in,vertical sep=0.85in}]
+\nextgroupplot[title={(a) Shuttle phase portrait},xlabel={$x_1$ ($\mu$m)},ylabel={$\dot x_1$ (mm/s)}]
+\addplot[tealcurve] table[x=x1_um,y=v1_mm_s,col sep=comma]{results/last_cycle_plot.csv};
+\nextgroupplot[title={(b) Electrical output},xlabel={Time in final cycle (ms)},ylabel={$V_o$ (mV)},xmin=0,xmax=50]
+\addplot[purplecurve] table[x expr={\thisrow{tau_us}/1000},y=Vout_mV,col sep=comma]{results/last_cycle_plot.csv};
+\nextgroupplot[title={(c) Instantaneous load power},xlabel={Time in final cycle (ms)},ylabel={$V_o^2/R$ (pW)},xmin=0,xmax=50]
+\addplot[orangecurve] table[x expr={\thisrow{tau_us}/1000},y=PR_pW,col sep=comma]{results/last_cycle_plot.csv};
+\nextgroupplot[title={(d) Capacitance along the mechanical cycle},xlabel={$x_1$ ($\mu$m)},ylabel={$C_t$ (pF)}]
+\addplot[tealcurve] table[x=x1_um,y=C_pF,col sep=comma]{results/last_cycle_plot.csv};
+\end{groupplot}
+\end{tikzpicture}
+\par\vspace{12pt}\small The plotted cycle is a finite-run diagnostic; apparent recurrence does not establish Floquet stability or exclude other attractors.\par
+Mean load power is computed from the integrated resistor-energy state over the last four cycles, not by averaging a sparsely sampled pulse trace.
+\end{document}

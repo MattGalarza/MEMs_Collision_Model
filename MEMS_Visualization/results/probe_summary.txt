@@ -1,0 +1,12 @@
+Julia 1.11.7; solver retcode = Success
+ER_J = 3.4663305551758744e-14
+ER_quadrature_J = 3.466330549658417e-14
+ER_quadrature_relative_error = 1.5917285343561524e-9
+duration_s = 0.0006
+energy_residual_over_throughput = 1.3784923470584802e-9
+film_panels = 512
+max_energy_residual_J = 1.638467854364644e-19
+reltol = 1.0e-7
+saved_steps = 800
+scaled_abstol = 1.0e-10
+Finite transient; neither a periodic-attractor proof nor experimental validation.

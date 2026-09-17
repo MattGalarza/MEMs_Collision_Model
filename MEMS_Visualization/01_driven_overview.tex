@@ -1,0 +1,25 @@
+\input{figure_style.tex}
+\begin{document}
+\figureheading{Driven response of the corrected MEMS model}{Native Julia simulation \quad 20 Hz \quad 4.95\,$g$ peak \quad 3 V bias \quad 8 cycles}
+\begin{tikzpicture}
+\begin{groupplot}[group style={group size=2 by 2,horizontal sep=0.55in,vertical sep=0.85in},xmin=0,xmax=400,xlabel={Time (ms)}]
+\nextgroupplot[title={(a) Shuttle and tip motion},ylabel={Displacement ($\mu$m)},legend pos=south west]
+\addplot[tealcurve] table[x=t_ms,y=x1_um,col sep=comma]{results/overview.csv};\addlegendentry{Shuttle $x_1$}
+\addplot[orangecurve] table[x=t_ms,y=x2_um,col sep=comma]{results/overview.csv};\addlegendentry{Tip $x_2$}
+\addplot[gray,densely dotted,forget plot] coordinates {(0,13.71)(400,13.71)};
+\addplot[gray,densely dotted,forget plot] coordinates {(0,-13.71)(400,-13.71)};
+\draw[gray,dashed] (axis cs:200,-15)--(axis cs:200,15);
+\nextgroupplot[title={(b) Electrical output},ylabel={$V_o$ (mV)}]
+\addplot[purplecurve] table[x=t_ms,y=Vout_mV,col sep=comma]{results/overview.csv};
+\draw[gray,dashed] (rel axis cs:.5,0)--(rel axis cs:.5,1);
+\nextgroupplot[title={(c) Total capacitance},ylabel={$C_t$ (pF)}]
+\addplot[tealcurve] table[x=t_ms,y=C_pF,col sep=comma]{results/overview.csv};
+\draw[gray,dashed] (rel axis cs:.5,0)--(rel axis cs:.5,1);
+\nextgroupplot[title={(d) Accumulated resistor energy},ylabel={$E_R$ (pJ)}]
+\addplot[orangecurve] table[x=t_ms,y=ER_pJ,col sep=comma]{results/overview.csv};
+\draw[gray,dashed] (rel axis cs:.5,0)--(rel axis cs:.5,1);
+\end{groupplot}
+\end{tikzpicture}
+\par\vspace{12pt}\small The ramp ends at 200 ms (vertical dashed line). Horizontal dotted lines in (a) mark nominal tip contact, $x_2=\pm13.71\,\mu$m.\par
+The voltage overview is sampled at 50\,$\mu$s intervals; use the contact and final-cycle figures for narrow pulses. Reference predictions, not calibrated device measurements.
+\end{document}

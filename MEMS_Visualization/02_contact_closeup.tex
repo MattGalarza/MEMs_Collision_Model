@@ -1,0 +1,24 @@
+\input{figure_style.tex}
+\begin{document}
+\figureheading{What happens when an electrode tip touches?}{First positive-wall entry in the final drive cycle \quad $\tau=0$: $x_2=g_c$ \quad 0.1\,$\mu$s sampling}
+\begin{tikzpicture}
+\begin{groupplot}[group style={group size=2 by 2,horizontal sep=0.55in,vertical sep=0.85in},xmin=-80,xmax=320,xlabel={Time from contact entry, $\tau$ ($\mu$s)}]
+\nextgroupplot[title={(a) Motion relative to the contact position},ylabel={Displacement from $g_c$ (nm)},legend pos=south east]
+\addplot[tealcurve] table[x=tau_us,y expr={(\thisrow{x1_um}-13.71)*1000},col sep=comma]{results/contact.csv};\addlegendentry{Shuttle}
+\addplot[orangecurve] table[x=tau_us,y=tip_overlap_nm,col sep=comma]{results/contact.csv};\addlegendentry{Tip overlap}
+\addplot[gray,densely dotted,forget plot] coordinates {(-80,0)(320,0)};
+\nextgroupplot[title={(b) Mechanical velocities},ylabel={Velocity (mm/s)},legend pos=north east]
+\addplot[tealcurve] table[x=tau_us,y=v1_mm_s,col sep=comma]{results/contact.csv};\addlegendentry{$\dot x_1$}
+\addplot[orangecurve] table[x=tau_us,y=v2_mm_s,col sep=comma]{results/contact.csv};\addlegendentry{$\dot x_2$}
+\nextgroupplot[title={(c) Contact-scale electrical signal},ylabel={$V_o$ (mV)}]
+\addplot[purplecurve] table[x=tau_us,y=Vout_mV,col sep=comma]{results/contact.csv};
+\nextgroupplot[title={(d) Generalized forces on the tip coordinate},ylabel={Force ($\mu$N)},legend pos=north east,legend columns=2]
+\addplot[purplecurve] table[x=tau_us,y=Qe2_uN,col sep=comma]{results/contact.csv};\addlegendentry{Electrostatic}
+\addplot[orangecurve] table[x=tau_us,y=Qwall2_uN,col sep=comma]{results/contact.csv};\addlegendentry{Wall}
+\addplot[tealcurve] table[x=tau_us,y=Qbend2_uN,col sep=comma]{results/contact.csv};\addlegendentry{Bending}
+\addplot[graycurve] table[x=tau_us,y=Qfilm2_uN,col sep=comma]{results/contact.csv};\addlegendentry{Fluid}
+\end{groupplot}
+\end{tikzpicture}
+\par\vspace{12pt}\small Positive overlap is permitted by compliant contact. The tip can slow while the shuttle continues moving, bending the electrode.\par
+Forces in (d) are signed, summed over all mobile beams, and conjugate to $x_2$. Base inertia and cross-coordinate inertia are not plotted in that panel.
+\end{document}

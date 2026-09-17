@@ -1,0 +1,6 @@
+Running reference model: 8 cycles, 20 Hz, 4.95 g, 3 V.
+visualization: Success; energy residual / throughput = 6.662387849306052e-11
+Contact entry at t = 0.3797237597568831 s. Exporting dense diagnostics.
+Running the short contact probe.
+probe: Success; energy residual / throughput = 1.3784923470584802e-9
+Data complete. Compile figure TeX files with pdflatex from this directory.

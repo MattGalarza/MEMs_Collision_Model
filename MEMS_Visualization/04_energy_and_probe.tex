@@ -1,0 +1,22 @@
+\input{figure_style.tex}
+\begin{document}
+\figureheading{Energy accounting and a separate contact probe}{Panels (a)--(c): driven run \quad Panel (d): unforced 600\,$\mu$s initial-condition experiment}
+\begin{tikzpicture}
+\begin{groupplot}[group style={group size=2 by 2,horizontal sep=0.55in,vertical sep=0.85in}]
+\nextgroupplot[title={(a) Stored energy and source work},xlabel={Time (ms)},ylabel={Energy / work (nJ)},legend pos=north west,legend columns=3]
+\addplot[tealcurve] table[x=t_ms,y=deltaE_nJ,col sep=comma]{results/energy_plot.csv};\addlegendentry{$E-E_0$}
+\addplot[orangecurve] table[x=t_ms,y=Wbase_nJ,col sep=comma]{results/energy_plot.csv};\addlegendentry{$W_{\rm base}$}
+\addplot[purplecurve] table[x=t_ms,y=Wbias_nJ,col sep=comma]{results/energy_plot.csv};\addlegendentry{$W_{\rm bias}$}
+\nextgroupplot[title={(b) Cumulative dissipation},xlabel={Time (ms)},ylabel={Dissipated energy (pJ)},ymode=log,ymin=1e-7,legend pos=south east]
+\addplot[tealcurve] table[x=t_ms,y expr={max(\thisrow{Dfilm_nJ}*1000,1e-12)},col sep=comma]{results/energy_plot.csv};\addlegendentry{Fluid}
+\addplot[orangecurve] table[x=t_ms,y expr={max(\thisrow{Dwall_nJ}*1000,1e-12)},col sep=comma]{results/energy_plot.csv};\addlegendentry{Contact}
+\addplot[purplecurve] table[x=t_ms,y=ER_pJ,col sep=comma]{results/energy_plot.csv};\addlegendentry{Resistor}
+\nextgroupplot[title={(c) Energy-balance residual},xlabel={Time (ms)},ylabel={$r_E$ (aJ)}]
+\addplot[graycurve] table[x=t_ms,y=residual_aJ,col sep=comma]{results/energy_plot.csv};
+\nextgroupplot[title={(d) Unforced contact-probe voltage},xlabel={Time ($\mu$s)},ylabel={$V_o$ (mV)}]
+\addplot[purplecurve] table[x=t_us,y=Vout_mV,col sep=comma]{results/probe_timeseries.csv};
+\end{groupplot}
+\end{tikzpicture}
+\par\vspace{12pt}\small $r_E=E-E_0-W_{\rm base}-W_{\rm bias}+E_R+D_{\rm film}+D_{\rm wall}+D_{\rm struct}$; $1$ aJ $=10^{-18}$ J.\par
+The larger signal in (d) follows a specified near-contact initial displacement and velocity; it is not the driven steady-state voltage. Numerical energy closure is not experimental validation.
+\end{document}

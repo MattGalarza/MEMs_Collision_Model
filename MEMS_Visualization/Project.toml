@@ -1,0 +1,10 @@
+[deps]
+ADTypes = "47edcb42-4c32-4615-8424-f2b9edc5f35b"
+OrdinaryDiffEqRosenbrock = "43230ef6-c299-4910-a778-202eb28ce4ce"
+SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
+
+[compat]
+ADTypes = "1"
+OrdinaryDiffEqRosenbrock = "1, 2"
+SciMLBase = "2, 3"
+julia = "1.10, 1.11, 1.12"

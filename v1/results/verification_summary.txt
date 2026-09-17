@@ -1,0 +1,11 @@
+Julia 1.11.6; all native verification assertions passed.
+ke_N_per_m = 22.596956982403483
+k1_N_per_m = 3.279937500000001
+k3_N_per_m3 = 3.035714285714286e8
+kss_N_per_m = 5.8309999999999995
+contact_travel_m = 1.3710000000000001e-5
+shape_mass_fraction = 0.3698209661455097
+max_cap_gradient_relative_error = 1.0095182096613795e-9
+max_film_refinement_relative_error = 2.749230710307468e-9
+max_point_energy_relative_error = 1.20064094909898e-7
+Numerical consistency is not experimental validation.

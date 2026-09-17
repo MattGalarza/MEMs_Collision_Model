@@ -40,6 +40,9 @@ const STATE_NAMES = (:x1, :x2, :v1, :v2, :Vout,
 "Gap sides r. The r = -1 gap opens and the r = +1 gap closes for positive displacement."
 const GAP_SIDES = (-1.0, 1.0)
 
+"Available squeeze-film closures; see `film_matrix_side`."
+const FILM_MODELS = (:lengthwise, :thickness, :modal)
+
 # -----------------------------------------------------------------------------
 # 1. Parameters
 # -----------------------------------------------------------------------------
@@ -95,6 +98,9 @@ Base.@kwdef struct Params
     mean_free_path::Float64 = 70e-9   # lambda [m]
     slip_coefficient::Float64 = 1.016 # sigma_p [-]
     film_scale::Float64 = 1.0         # calibration multiplier c_f on the film matrix [-]
+    film_model::Symbol = :lengthwise  # gas drainage closure: :lengthwise | :thickness | :modal (Section 6)
+    film_modes::Int = 8               # :modal only: through-thickness modes solved; the rest use the local limit
+    n_vented_faces::Int = 2           # device-layer faces open to ambient: 2 (top and bottom) or 1
     seal_at_contact::Bool = true      # candidate open-to-sealed tip boundary closure
     seal_width::Float64 = 25e-9       # sealing transition half-width l_s [m]; sensitivity parameter
 
@@ -261,6 +267,8 @@ Reduced-order model. Fields (TeX symbol in brackets):
 | `beta`    | base-excitation vector [beta = M 1]                             |
 | `Cstruct` | structural damping matrix [C_s]                                 |
 | `y`,`weights` | graded Simpson grid on the overlap                          |
+| `wtrap`   | trapezoid nodal weights on the same nodes (linear elements, :modal) |
+| `vent_width` | through-thickness strip width W: Tf (two vented faces) or 2 Tf (one) |
 | `B1`,`B2` | shape weights at the grid nodes, B1 + B2 = 1                    |
 | `panels`  | number of Simpson panels                                        |
 """
@@ -280,6 +288,8 @@ struct Model
     Cstruct::Matrix{Float64}
     y::Vector{Float64}
     weights::Vector{Float64}
+    wtrap::Vector{Float64}
+    vent_width::Float64
     B1::Vector{Float64}
     B2::Vector{Float64}
     panels::Int
@@ -301,6 +311,9 @@ function validate(p::Params, panels)
         p.mean_free_path, p.slip_coefficient, p.khs)
     require(all(>=(0), nonnegative), "a nonnegative parameter is < 0")
     require(p.ghs >= p.gss, "hard stop must not engage before the soft stop")
+    require(p.film_model in FILM_MODELS, "film_model must be one of $(FILM_MODELS)")
+    require(p.film_modes >= 1, "film_modes must be at least 1")
+    require(p.n_vented_faces in (1, 2), "n_vented_faces must be 1 or 2")
     return nothing
 end
 
@@ -316,6 +329,11 @@ function Model(p::Params = Params(); panels::Int = 512)
     require(isposdef(Symmetric(M)), "mass matrix is not positive definite")
 
     y, weights = graded_simpson_grid(p, alpha, panels)
+    spacing = diff(y)
+    wtrap = zero(y)
+    wtrap[1:end-1] .+= spacing ./ 2
+    wtrap[2:end] .+= spacing ./ 2
+    vent_width = p.n_vented_faces == 2 ? p.Tf : 2 * p.Tf
     B2 = [beam_shape(p, ke, p.Lf - v) for v in y]   # y = Lf - s
     B1 = 1 .- B2
 
@@ -326,7 +344,7 @@ function Model(p::Params = Params(); panels::Int = 512)
     beta = M * ones(2)
 
     return Model(p, ke, k1, k3, kss, gc, alpha, hd, kp, M, inv(M), beta, Cstruct,
-        y, weights, B1, B2, panels)
+        y, weights, wtrap, vent_width, B1, B2, panels)
 end
 
 # -----------------------------------------------------------------------------
@@ -351,18 +369,43 @@ function cumulative_simpson(m::Model, f)
 end
 
 """
-    film_matrix_side(m, h, h1, h2, chi)
+    film_matrix_side(m, h, h1, h2, chi) -> (d11, d12, d22)
 
 Generalized squeeze-film matrix of ONE gap of ONE beam, divided by 12 eta Tf,
-in the centered Gram form (TeX Eq. `gram`):
+for the closure selected by `m.p.film_model`. All three are Gram forms and
+therefore positive semidefinite without relying on cancellation.
 
-    integral of (H - Hbar)(H - Hbar)' / G  +  chi I0 Hbar Hbar',   G = h^2 (h + kp).
-
-`chi` in [0, 1] is the tip boundary closure (0 open, 1 sealed). The form is
-positive semidefinite term by term for positive weights, so passivity does not
-depend on cancellation. Returns the three independent entries (d11, d12, d22).
+* `:lengthwise` gas leaves only along the electrode length y (tip and distal
+  end). The first corrected formulation. Exact when the device-layer faces
+  are sealed; with vented faces it overestimates damping ~200x at the rest gap
+  and ~6x at contact.
+* `:thickness`  gas leaves only through the device-layer thickness z, the
+  narrow-strip limit eta Tf W^2 * integral of h_i h_j / G. Within ~10 % for
+  gaps above a few micrometers; ~7x too stiff at contact, where the tip region
+  actually vents along y into the wider gap next to it.
+* `:modal`      two-dimensional Reynolds equation (G p_y)_y + G p_zz = 12 eta hdot
+  with p = 0 on the vented faces: cosine modes in z, linear elements in y.
+  Contains both limits and the tip sealing closure. Recommended whenever the
+  faces are vented.
 """
 function film_matrix_side(m::Model, h, h1, h2, chi)
+    kind = m.p.film_model
+    kind === :lengthwise && return film_lengthwise(m, h, h1, h2, chi)
+    kind === :thickness && return film_thickness(m, h, h1, h2)
+    return film_modal(m, h, h1, h2, chi)
+end
+
+"""
+    film_lengthwise(m, h, h1, h2, chi)
+
+Centered Gram form of the one-dimensional (lengthwise) Reynolds solution
+(TeX Eq. `gram`):
+
+    integral of (H - Hbar)(H - Hbar)' / G  +  chi I0 Hbar Hbar',   G = h^2 (h + kp),
+
+where `chi` in [0, 1] is the tip boundary closure (0 open, 1 sealed).
+"""
+function film_lengthwise(m::Model, h, h1, h2, chi)
     H1 = cumulative_simpson(m, h1)
     H2 = cumulative_simpson(m, h2)
     W = m.weights ./ (h .^ 2 .* (h .+ m.kp))   # quadrature weight / G(h)
@@ -377,6 +420,110 @@ function film_matrix_side(m::Model, h, h1, h2, chi)
     return d11, d12, d22
 end
 
+"Local moments: integral of h_i h_j / G over the overlap (Simpson), entries (11, 12, 22)."
+function film_local_moments(m::Model, h, h1, h2)
+    W = m.weights ./ (h .^ 2 .* (h .+ m.kp))
+    return dot(W, h1 .^ 2), dot(W, h1 .* h2), dot(W, h2 .^ 2)
+end
+
+"""
+    film_thickness(m, h, h1, h2)
+
+Narrow-strip limit (TeX Eq. `strip`): every station y vents independently
+through the thickness, D = eta Tf W^2 * integral of h_i h_j / G, i.e. W^2/12
+times the local moments in the units of `film_matrix_side`. No tip closure enters.
+"""
+function film_thickness(m::Model, h, h1, h2)
+    l11, l12, l22 = film_local_moments(m, h, h1, h2)
+    factor = m.vent_width^2 / 12
+    return factor * l11, factor * l12, factor * l22
+end
+
+"""
+    film_modal(m, h, h1, h2, chi)
+
+Two-dimensional Reynolds closure (TeX Eqs. `modalbvp`-`modalD`). With p = 0 on
+the vented faces, p = sum_n p_n(y) cos(k_n z), k_n = (2n+1) pi / W, and each
+mode solves the symmetric positive definite problem
+
+    -(G p_n')' + k_n^2 G p_n = -12 eta c_n hdot,   p_n(Leff) = 0,   G p_n'(0) = kappa p_n(0),
+
+so that D / (12 eta Tf) = sum_n w_n <h_i, A_n^{-1} h_j>, w_n = 8 / ((2n+1) pi)^2.
+
+Discretization: linear elements on the grid nodes, harmonic-mean G per
+element, lumped (trapezoid) weights for the k_n^2 G term and the load, and a
+Thomas solve per mode with both right-hand sides. The first `film_modes`
+modes are solved; higher modes are in their local limit and are summed in
+closed form (the "tail"), which removes the slow 1/n^2 truncation error.
+The Robin coefficient is chosen so that the tip closure means the same as in
+`film_lengthwise`: chi = 1 / (1 + kappa I0).
+"""
+function film_modal(m::Model, h, h1, h2, chi)
+    T = promote_type(eltype(h), typeof(chi))
+    y = m.y
+    wT = m.wtrap
+    n = length(y)
+    nu = n - 1                                   # node n is the vented distal end, p = 0
+    G = h .^ 2 .* (h .+ m.kp)
+    g = [2 * G[e] * G[e+1] / ((G[e] + G[e+1]) * (y[e+1] - y[e])) for e in 1:nu]   # element conductances
+    I0 = sum(inv, g)
+    kappa = (1 - chi) / (max(chi, 1e-12) * I0)
+    b1 = h1 .* wT                                # lumped loads
+    b2 = h2 .* wT
+
+    dia = Vector{T}(undef, nu)
+    cprime = Vector{T}(undef, nu)
+    p1 = Vector{T}(undef, nu)
+    p2 = Vector{T}(undef, nu)
+    s11 = zero(T)
+    s12 = zero(T)
+    s22 = zero(T)
+    captured = 0.0                               # share of the local limit carried by the solved modes
+    for mode in 0:m.p.film_modes-1
+        odd = 2 * mode + 1
+        k2 = (odd * pi / m.vent_width)^2
+        weight = 8 / (odd * pi)^2
+        captured += 96 / (odd * pi)^4
+        for a in 1:nu
+            dia[a] = g[a] + k2 * G[a] * wT[a]
+            if a > 1
+                dia[a] += g[a-1]
+            end
+        end
+        dia[1] += kappa
+        # Thomas elimination; sub- and super-diagonal entries are -g.
+        cprime[1] = -g[1] / dia[1]
+        p1[1] = b1[1] / dia[1]
+        p2[1] = b2[1] / dia[1]
+        for a in 2:nu
+            den = dia[a] + g[a-1] * cprime[a-1]
+            cprime[a] = -g[a] / den
+            p1[a] = (b1[a] + g[a-1] * p1[a-1]) / den
+            p2[a] = (b2[a] + g[a-1] * p2[a-1]) / den
+        end
+        for a in nu-1:-1:1
+            p1[a] -= cprime[a] * p1[a+1]
+            p2[a] -= cprime[a] * p2[a+1]
+        end
+        q11 = zero(T)
+        q12 = zero(T)
+        q21 = zero(T)
+        q22 = zero(T)
+        for a in 1:nu
+            q11 += b1[a] * p1[a]
+            q12 += b1[a] * p2[a]
+            q21 += b2[a] * p1[a]
+            q22 += b2[a] * p2[a]
+        end
+        s11 += weight * q11
+        s12 += weight * (q12 + q21) / 2
+        s22 += weight * q22
+    end
+    l11, l12, l22 = film_local_moments(m, h, h1, h2)
+    tail = (1 - captured) * m.vent_width^2 / 12
+    return s11 + tail * l11, s12 + tail * l12, s22 + tail * l22
+end
+
 "Tip sealing fraction chi_r for gap side r (TeX Eq. `seal`)."
 function seal_fraction(m::Model, r, x2)
     p = m.p
@@ -389,7 +536,8 @@ end
 
 Total capacitance `C` [F] (TeX Eq. `cap`), its exact coordinate gradient
 `grad` = (dC/dx1, dC/dx2) [F/m], and the passive generalized film matrix `D`
-[N s/m] summed over both gaps of all beams (TeX Eq. `gram`). With
+[N s/m] summed over both gaps of all beams, for the closure `m.p.film_model`
+(`film_matrix_side`). With
 `film = false` the film matrix is skipped and returned as zeros.
 """
 function constitutive(m::Model, x1, x2; film::Bool = true)

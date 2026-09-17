@@ -4,9 +4,10 @@
 # Included into module CorrectedMEMS. Standard libraries only.
 #
 #   verify()  runs (a) the 48 assertions of the first corrected file, unchanged
-#             in content and tolerance, and (b) interface checks for the
-#             restructured right-hand side. It then writes the audit CSVs that
-#             the TeX document plots.
+#             in content and tolerance, (b) 7 interface checks for the
+#             restructured right-hand side, and (c) 33 checks of the selectable
+#             squeeze-film closures. It then writes the audit CSVs that the
+#             TeX document plots.
 #
 # Numerical consistency is not experimental validation.
 # =============================================================================
@@ -246,6 +247,8 @@ function verify(; outdir = joinpath(@__DIR__, "results"))
         end
     end
 
+    verify_film_closures(m)
+
     open(joinpath(outdir, "verification_summary.txt"), "w") do io
         println(io, "Julia ", VERSION, "; all native verification assertions passed.")
         entries = ("ke_N_per_m" => m.ke, "k1_N_per_m" => m.k1, "k3_N_per_m3" => m.k3,
@@ -264,6 +267,74 @@ function verify(; outdir = joinpath(@__DIR__, "results"))
     write_pinned_tip_path(m, joinpath(outdir, "pinned_tip_path.csv"))
     println("Verification outputs written to ", outdir)
     return (; caperr, filmerr, energyerr)
+end
+
+"""
+    verify_film_closures(reference)
+
+Checks of the selectable squeeze-film closures (33 assertions). Analytic
+limits: the narrow-strip formula for `:thickness`, and the classical
+finite-rectangle factor 1 - (192/pi^5)(W/L) sum_{n odd} tanh(n pi L / 2W)/n^5
+for `:modal` with a uniform gap. Cross-language anchors come from the verified
+Python twin (same discretization, 512 panels, 8 modes). Physical ordering:
+opening an additional vent path can only reduce dissipation, so
+D_modal <= D_thickness and D_modal <= D_lengthwise in the semidefinite order.
+"""
+function verify_film_closures(reference::Model)
+    p = reference.p
+    rebuilt(; kw...) = Model(Params(; (name => getfield(p, name) for name in fieldnames(Params))..., kw...);
+        panels = reference.panels)
+    thick = rebuilt(film_model = :thickness)
+    modal = rebuilt(film_model = :modal)
+    modal_refined = Model(modal.p; panels = 2 * reference.panels)
+    total(D) = sum(D)                               # rigid translation, 1' D 1
+
+    @testset "squeeze-film closures" begin
+        @testset "analytic limits (uniform gap)" begin
+            gap = p.g0 - 2 * p.Tp
+            G = gap^2 * (gap + reference.kp)
+            strip = 2 * p.n_beams * p.eta * p.Tf^3 * p.Leff / G
+            flat_thick = rebuilt(film_model = :thickness, gap_slope = 0.0)
+            flat_modal = rebuilt(film_model = :modal, gap_slope = 0.0)
+            @test isapprox(total(constitutive(flat_thick, 0.0, 0.0).D), strip; rtol = 1e-6)
+            aspect = p.Tf / p.Leff
+            plate = 1 - 192 / pi^5 * aspect * sum(tanh(n * pi / (2 * aspect)) / n^5 for n in 1:2:199)
+            @test isapprox(total(constitutive(flat_modal, 0.0, 0.0).D) / strip, plate; rtol = 1e-4)
+        end
+        @testset "cross-language anchors (Python twin)" begin
+            entries(D) = [D[1, 1], D[1, 2], D[2, 2]]
+            approach = (reference.gc - 1e-6, reference.gc - 1e-6)
+            contact = (reference.gc + 0.1e-6, reference.gc - 2e-9)
+            @test all(isapprox.(entries(constitutive(thick, approach...).D),
+                [2.288636691328e-06, 8.286935353846e-06, 1.585295558390e-04]; rtol = 1e-8))
+            @test all(isapprox.(entries(constitutive(modal, approach...).D),
+                [2.232329670748e-06, 7.575106203150e-06, 9.241694091461e-05]; rtol = 1e-8))
+            @test all(isapprox.(entries(constitutive(thick, contact...).D),
+                [5.252861111351e-06, 9.286072624765e-05, 1.590764808095e-02]; rtol = 1e-8))
+            @test all(isapprox.(entries(constitutive(modal, contact...).D),
+                [4.645929955768e-06, 4.633850155302e-05, 1.922584610404e-03]; rtol = 1e-8))
+        end
+        @testset "passivity, refinement, energy identity, vent ordering" begin
+            for (x1, x2) in verification_states(reference)
+                Dm = constitutive(modal, x1, x2).D
+                @test eigmin(Symmetric(Dm)) >= 0
+                Dr = constitutive(modal_refined, x1, x2).D
+                @test norm(Dm - Dr) / norm(Dr) < 2e-4
+                @test point_energy_error(modal, x1, x2) < 5e-5
+                @test eigmin(Symmetric(constitutive(thick, x1, x2).D - Dm)) >= 0
+                @test eigmin(Symmetric(constitutive(reference, x1, x2).D - Dm)) >= 0
+            end
+            a = constitutive(modal, 1e-6, 2e-6)
+            b = constitutive(modal, -1e-6, -2e-6)
+            @test norm(a.D - b.D) < 1e-12 * norm(a.D)
+        end
+        @testset "number-type genericity of the modal solve" begin
+            x1, x2 = reference.gc + 0.1e-6, reference.gc - 2e-9
+            Db = constitutive(modal, big(x1), big(x2)).D
+            @test isapprox(Float64.(Db), constitutive(modal, x1, x2).D; rtol = 1e-9)
+        end
+    end
+    return nothing
 end
 
 """

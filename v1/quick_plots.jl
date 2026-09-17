@@ -10,7 +10,7 @@
 #     compare()                                # :lengthwise vs :modal, last drive cycle
 #
 # A window opens and a PNG is saved in results/. Needs Plots (once: ] add Plots)
-# plus the solver packages already in this folder's project environment.
+# plus the solver packages already in this folder's project environment. 
 # =============================================================================
 using Plots
 include(joinpath(@__DIR__, "collision_model_corrected.jl"))
@@ -19,9 +19,19 @@ using .CorrectedMEMS
 default(fontfamily = "Computer Modern", palette = :okabe_ito, linewidth = 1.2,
     framestyle = :box, grid = true, legend = :topright)
 
+"Build Params; works with an older mems_core.jl that has no film_model option."
+function make_params(film_model, Vbias)
+    if :film_model in fieldnames(Params)
+        return Params(; film_model, Vbias)
+    end
+    film_model == :lengthwise || error("This mems_core.jl has no film_model option. " *
+        "Replace mems_core.jl and mems_verify.jl with the newer versions, then include(\"quick_plots.jl\") again.")
+    return Params(; Vbias)
+end
+
 "Run one case and return physical time histories (rows = accepted solver steps)."
 function run_case(; film_model = :lengthwise, kind = :drive, cycles = 8, Vbias = 3.0, freq = 20.0)
-    p = Params(; film_model, Vbias)
+    p = make_params(film_model, Vbias)
     tag = "quick_$(kind)_$(film_model)_$(Vbias)V"
     r = simulate(; p, kind, cycles, freq, tag)
     U = Matrix(reduce(hcat, [u .* r.scale for u in r.sol.u])')

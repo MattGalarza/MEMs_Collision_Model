@@ -1,0 +1,2 @@
+ER relative change, tighter tolerances = 1.6208951736373933e-8
+ER relative change, doubled film panels = 3.161639838822339e-10

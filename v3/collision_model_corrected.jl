@@ -3,9 +3,9 @@
 # Julia-only implementation and numerical verification. See the companion TeX.
 # Run: julia collision_model_corrected.jl --verify
 # Default: julia --project=. collision_model_corrected.jl (10-cycle drive + plots)
-# More: --probe | --drive --cycles 30 | --convergence | --help 
+# More: --probe | --drive --cycles 30 | --convergence | --help
 module CorrectedMEMS
-using LinearAlgebra, Printf, Test, Dates, TOML
+using LinearAlgebra, Printf, Test, Dates
 export Params, Model, PlotOptions, constitutive, rhs!, energy, verify, simulate, convergence, makeplots
 
 Base.@kwdef struct Params
@@ -223,10 +223,16 @@ function energy(m,u)
 end
 ledger(m,u,E0)=energy(m,u)-E0-u[6]-u[7]+sum(u[8:11])
 function writecsv(path,header,rows)
-    open(path,"w") do io
-        println(io,join(header,","))
-        for row in rows; println(io,join(row,",")); end
-    end
+    # Legacy internal call sites now feed worksheets, never standalone CSVs.
+    book=get(task_local_storage(),:MEMS_review_book,nothing)
+    book===nothing && error("Data export requires an active run workbook")
+    stem=splitext(basename(path))[1]
+    names=Dict("cycle_metrics"=>"CycleMetrics","diagnostics_full"=>"DiagnosticsFull",
+        "diagnostics_last_two_cycles"=>"DiagnosticsLastTwo","diagnostics_final_transient"=>"DiagnosticsTail")
+    name=get(names,stem,stem)
+    endswith(stem,"_timeseries") && (name="UniformTimeSeries")
+    endswith(stem,"_contact_window") && (name="LegacyContactWindow")
+    booktable!(book,name,header,rows)
 end
 
 # Independent audit of the old open-open wedge formula. These use the old
@@ -259,6 +265,17 @@ function restitution(vin,cw)
 end
 
 function verify(;outdir=joinpath(@__DIR__,"results"))
+    @eval import XLSX
+    Base.invokelatest() do
+        book=ReviewBook()
+        result=task_local_storage(:MEMS_review_book,book) do
+            _verify(;outdir)
+        end
+        save_workbook(book,joinpath(outdir,"Verification.xlsx"))
+        result
+    end
+end
+function _verify(;outdir=joinpath(@__DIR__,"results"))
     mkpath(outdir); m=Model(); p=m.p; mr=Model(p;panels=1024)
     massphys=p.rho*p.Tf*p.Lf*(p.wb+p.wt)/2
     frac=m.M[2,2]/p.n_beams/massphys
@@ -313,16 +330,12 @@ function verify(;outdir=joinpath(@__DIR__,"results"))
         @test norm(constitutive(m,1e-6,2e-6).D-constitutive(m,-1e-6,-2e-6).D)<1e-15
         @test norm(constitutive(m,0.0,0.0).grad)<1e-20
     end
-    open(joinpath(outdir,"verification_summary.txt"),"w") do io
-        println(io,"Julia ",VERSION,"; all native verification assertions passed.")
-        for (name,value) in ("ke_N_per_m"=>m.ke,"k1_N_per_m"=>m.k1,"k3_N_per_m3"=>m.k3,
-            "kss_N_per_m"=>m.kss,"contact_travel_m"=>m.gc,"shape_mass_fraction"=>frac,
-            "max_cap_gradient_relative_error"=>caperr,"max_film_refinement_relative_error"=>filmerr,
-            "max_point_energy_relative_error"=>energyerr)
-            println(io,name," = ",value)
-        end
-        println(io,"Numerical consistency is not experimental validation.")
-    end
+    bookmetadata!(task_local_storage(:MEMS_review_book),"Summary",Dict(
+        "julia_version"=>string(VERSION),"status"=>"All native verification assertions passed",
+        "ke_N_per_m"=>m.ke,"k1_N_per_m"=>m.k1,"k3_N_per_m3"=>m.k3,
+        "kss_N_per_m"=>m.kss,"contact_travel_m"=>m.gc,"shape_mass_fraction"=>frac,
+        "max_cap_gradient_relative_error"=>caperr,"max_film_refinement_relative_error"=>filmerr,
+        "max_point_energy_relative_error"=>energyerr))
     rows=[]
     for h in exp.(range(log(1e-9),log(20e-6);length=70))
         a=(p.wb-p.wt)/p.Leff; K=p.eps0*p.Tf; cair=K/a*log1p(a*p.Leff/h)
@@ -345,24 +358,27 @@ function verify(;outdir=joinpath(@__DIR__,"results"))
     (;caperr,filmerr,energyerr)
 end
 
-# Solvers are loaded only for simulations; --verify needs Julia stdlibs only.
+# Solvers are loaded only for simulations. Verification exports use XLSX.jl.
 function simulate(;kwargs...)
-    @eval import SciMLBase, OrdinaryDiffEqRosenbrock, ADTypes, CairoMakie
-    Base.invokelatest(_simulate;kwargs...)
+    @eval import SciMLBase, OrdinaryDiffEqRosenbrock, ADTypes, CairoMakie, XLSX
+    Base.invokelatest() do
+        book=ReviewBook()
+        task_local_storage(:MEMS_review_book,book) do
+            _simulate(;book,kwargs...)
+        end
+    end
 end
 function _simulate(;p=Params(),panels=512,kind=:probe,cycles=10,freq=20.0,
-        acceleration=1.9*9.80665,reltol=1e-7,abstol=1e-10,
+        alpha=4.95,acceleration=nothing,reltol=1e-7,abstol=1e-10,
+        dtmax=kind==:probe ? 1e-6 : 2e-5,book=ReviewBook(),
         outdir=joinpath(@__DIR__,"results"),tag=string(kind),plot_options=PlotOptions())
     @assert kind in (:probe,:drive) && cycles>4 && freq>0
     @assert occursin(r"^[A-Za-z0-9_-]+$",tag) "Use letters, digits, underscores or hyphens in tag"
-    # A new directory on EVERY simulation prevents earlier runs being overwritten.
-    root=abspath(outdir); mkpath(root)
-    runname=tag*"__"*Dates.format(now(),"yyyymmdd_HHMMSS_sss")
-    outdir=joinpath(root,runname); suffix=1
-    while ispath(outdir)
-        outdir=joinpath(root,runname*"_"*string(suffix)); suffix+=1
-    end
-    m=Model(p;panels); mkpath(outdir)
+    acceleration=isnothing(acceleration) ? alpha*9.80665 : acceleration
+    @assert isfinite(acceleration) && acceleration>=0 && dtmax>0
+    forcing_alpha=kind==:drive ? acceleration/9.80665 : 0.0
+    m=Model(p;panels)
+    outdir=run_directory(abspath(outdir),forcing_alpha,p.Vbias,kind==:drive ? freq : 0.0;kind)
     xs=m.gc; vs=xs*sqrt(m.k1/sum(m.M)); Es=m.k1*xs^2
     scale=[xs,xs,vs,vs,max(abs(p.Vbias),1.0),fill(Es,7)...]
     u0=zeros(12)
@@ -378,7 +394,7 @@ function _simulate(;p=Params(),panels=512,kind=:probe,cycles=10,freq=20.0,
     prob=SciMLBase.ODEProblem(scaled_rhs!,u0./scale,(0.0,tend),(m,accel))
     println("Simulating ",tag," for ",tend," s; output: ",outdir);flush(stdout)
     sol=SciMLBase.solve(prob,OrdinaryDiffEqRosenbrock.Rodas5P(autodiff=ADTypes.AutoFiniteDiff());
-        reltol,abstol,dtmax=kind==:probe ? 1e-6 : 2e-5,maxiters=10^7,
+        reltol,abstol,dtmax,maxiters=10^7,
         save_everystep=true,dense=true)
     @assert SciMLBase.successful_retcode(sol) "Solver failed: $(sol.retcode)"
     @assert isapprox(sol.t[end],tend;rtol=1e-12) "Incomplete integration"
@@ -408,31 +424,23 @@ function _simulate(;p=Params(),panels=512,kind=:probe,cycles=10,freq=20.0,
     metrics=Dict("ER_J"=>last[8],"ER_quadrature_J"=>ERquad,"ER_quadrature_relative_error"=>erquad,
         "max_energy_residual_J"=>maxres,"energy_residual_over_throughput"=>relledger,
         "saved_steps"=>length(sol.t),"duration_s"=>tend,"film_panels"=>panels,
-        "reltol"=>reltol,"scaled_abstol"=>abstol)
+        "reltol"=>reltol,"scaled_abstol"=>abstol,"dtmax_s"=>dtmax,
+        "forcing_alpha_g"=>forcing_alpha,"solver_retcode"=>string(sol.retcode))
     if kind==:drive
         u=physical(tend); prev=physical(tend-1/freq)
         metrics["last_cycle_scaled_recurrence_error"]=norm((u[1:5]-prev[1:5])./scale[1:5])
         metrics["last_four_cycles_mean_power_W"]=(u[8]-physical(tend-4/freq)[8])/(4/freq)
-        # Fine window around the last sampled sign change, if a contact occurs.
-        us=[z.*scale for z in sol.u]
-        k=findlast(j->(abs(us[j][2])-m.gc)*(abs(us[j-1][2])-m.gc)<0,2:length(us))
-        if k!==nothing
-            tcontact=sol.t[k+1]; win=range(max(0,tcontact-100e-6),min(tend,tcontact+300e-6);length=2001)
-            writecsv(joinpath(outdir,tag*"_contact_window.csv"),["t_s","x1_um","x2_um","Vout_mV"],
-                [(t,physical(t)[1]*1e6,physical(t)[2]*1e6,physical(t)[5]*1e3) for t in win])
-        end
-    end
-    open(joinpath(outdir,tag*"_summary.txt"),"w") do io
-        println(io,"Julia ",VERSION,"; solver retcode = ",sol.retcode)
-        for k in sort(collect(keys(metrics)));println(io,k," = ",metrics[k]);end
-        println(io,"Finite transient; neither a periodic-attractor proof nor experimental validation.")
     end
     println(tag,": ",sol.retcode,"; energy residual / throughput = ",relledger)
     run=(;metrics,sol,scale,model=m,kind,freq,acceleration=accel,
-        acceleration_amplitude=kind==:drive ? acceleration : 0.0,tag,outdir)
+        acceleration_amplitude=kind==:drive ? acceleration : 0.0,tag,outdir,book)
     println("Generating automatic review plots in ",outdir)
     plots=makeplots(run;options=plot_options)
-    (;run...,plots)
+    workbook=joinpath(outdir,basename(outdir)*".xlsx")
+    booktable!(book,"AcceptedStates",vcat(["time_s"],STATE_HEADERS),
+        [(sol.t[j],(sol.u[j].*scale)...) for j in eachindex(sol.t)])
+    save_workbook(book,workbook)
+    (;run...,plots,workbook)
 end
 function convergence(;outdir=joinpath(@__DIR__,"results"))
     a=simulate(;outdir,tag="probe")
@@ -441,21 +449,9 @@ function convergence(;outdir=joinpath(@__DIR__,"results"))
     d1=abs(a.metrics["ER_J"]/b.metrics["ER_J"]-1)
     d2=abs(b.metrics["ER_J"]/c.metrics["ER_J"]-1)
     @assert max(d1,d2)<0.01 "Probe load energy is not converged to 1 percent"
-    open(joinpath(outdir,"probe_convergence.txt"),"w") do io
-        println(io,"ER relative change, tighter tolerances = ",d1)
-        println(io,"ER relative change, doubled film panels = ",d2)
-    end
-    latexnum(v)=begin s=@sprintf("%.3e",v); a,b=split(s,"e");a*"\\times10^{"*string(parse(Int,b))*"}" end
-    open(joinpath(outdir,"probe_summary.tex"),"w") do io
-        println(io,"\\begin{tabular}{lr}\\toprule Quantity & Value ","\\\\","\\midrule")
-        for (label,v) in [("Integrated load energy (J)",a.metrics["ER_J"]),
-            ("Energy residual / power throughput",a.metrics["energy_residual_over_throughput"]),
-            ("Independent resistor quadrature error",a.metrics["ER_quadrature_relative_error"]),
-            ("Load-energy change: solver refinement",d1),("Load-energy change: film refinement",d2)]
-            println(io,label," & \$",latexnum(v),"\$ ","\\\\")
-        end
-        println(io,"\\bottomrule\\end{tabular}")
-    end
+    booktable!(a.book,"Convergence",["comparison","relative_load_energy_change"],
+        [("tighter solver tolerances",d1),("doubled fluid panels",d2)])
+    save_workbook(a.book,a.workbook)
     (;tolerance_change=d1,grid_change=d2)
 end
 
@@ -476,6 +472,15 @@ Base.@kwdef struct PlotOptions
     sweep_voltage::Union{Nothing,Float64} = nothing # fixed capacitor voltage, V
     sweep_speed::Union{Nothing,Float64} = nothing # signed-velocity range +/- v, m/s
     bending_limit::Union{Nothing,Float64} = nothing # relative displacement, m
+    contact_band::Float64 = 25e-9 # episode begins/ends at delta = -band
+    crossing_deadband::Float64 = 0.1e-9 # diagnostics only; no change to contact law
+    contact_subdivisions::Int = 4 # compare n with 2n per accepted ODE step
+    contact_time_tol::Float64 = 1e-13
+    contact_points::Int = 4001
+    contact_padding::Float64 = 30e-6
+    contact_zoom::Float64 = 800e-6
+    refine_contact::Bool = true
+    refinement_event_tol::Float64 = 1e-7 # 0.1 microsecond; reported in workbook
 end
 
 const FORCE_NAMES = ["Suspension: linear", "Suspension: cubic", "Electrode bending",
@@ -744,28 +749,6 @@ function review_cycles(run,options,dir,items)
     (;label,period,errors=e1)
 end
 
-function review_events(run,times,dir)
-    m=run.model; events=Tuple{Float64,Int,String,Float64}[]
-    for r in (-1,1)
-        gap(t)=m.gc-r*run.sol(t)[2]*run.scale[2]
-        for j in 2:length(times)
-            a=times[j-1]; b=times[j]; ga=gap(a); gb=gap(b)
-            ((ga*gb<0) || (gb==0 && ga!=0)) || continue
-            for _ in 1:60
-                b-a<=max(1e-13,8*eps(max(abs(a),abs(b)))) && break
-                mid=(a+b)/2; gm=gap(mid)
-                if signbit(gm)==signbit(ga); a=mid;ga=gm;else;b=mid;end
-            end
-            t=(a+b)/2; vr=r*run.sol(t)[4]*run.scale[4]
-            label=abs(vr)<=1e-9*run.scale[4] ? "tangent_candidate" : vr>0 ? "entry" : "exit"
-            push!(events,(t,r,label,vr))
-        end
-    end
-    sort!(events;by=first)
-    writecsv(joinpath(dir,"contact_events.csv"),["time_s","side","event","normal_velocity_m_s"],events)
-    events
-end
-
 # Symmetric grid enriched near nominal contact so nm transitions remain resolved
 # even when the complete travel is tens of micrometres.
 function review_sweep_grid(m,limit,n)
@@ -895,10 +878,579 @@ function review_force_maps(run,tr,dir,items,options)
     (;limit,voltage=V,speed,bending_limit=bend)
 end
 
+
+# One workbook per run. Numerical tables are accumulated in the current Julia
+# task; independent simulations do not share an export buffer.
+mutable struct ReviewBook
+    names::Vector{String}
+    tables::Dict{String,Any}
+end
+ReviewBook()=ReviewBook(String[],Dict{String,Any}())
+function booktable!(book,name,header,rows)
+    key=String(name)
+    key in book.names || push!(book.names,key)
+    book.tables[key]=(header=String.(header),rows=collect(rows))
+    nothing
+end
+function bookmetadata!(book,name,d;prefix="")
+    rows=Tuple{String,Any}[]
+    function visit(d,prefix)
+        for k in sort(collect(keys(d));by=string)
+            key=isempty(prefix) ? string(k) : prefix*"."*string(k)
+            d[k] isa AbstractDict ? visit(d[k],key) : push!(rows,(key,d[k]))
+        end
+    end
+    visit(d,prefix);booktable!(book,name,["quantity","value"],rows)
+end
+
+"""Deterministic parameter name; repeats use __02, __03, ... without overwriting."""
+function run_directory(root,alpha,Vbias,freq;kind=:drive)
+    all(isfinite,(alpha,Vbias,freq)) || error("Run-name parameters must be finite")
+    label(x)=iszero(x) ? "0" : @sprintf("%.10g",x)
+    base="RUN_$(label(alpha))g_$(label(Vbias))V_$(label(freq))Hz"
+    kind==:probe && (base*="_PROBE")
+    mkpath(root)
+    for n in 1:100000
+        path=joinpath(root,n==1 ? base : base*@sprintf("__%02d",n))
+        ispath(path) && continue
+        try
+            mkdir(path);return path
+        catch err
+            isdir(path) || rethrow(err) # retry a concurrent reservation
+        end
+    end
+    error("Too many repeated run names")
+end
+
+function workbook_value(x)
+    x===nothing || ismissing(x) ? "n.a." :
+    x isa AbstractFloat && !isfinite(x) ? string(x) :
+    x isa Number || x isa Bool || x isa AbstractString ? x : string(x)
+end
+function save_workbook(book,path)
+    # XLSX.jl keeps this reusable simulation workflow entirely in Julia.
+    xf=XLSX.newxlsx("Summary")
+    priority=["Summary","ContactCounts","ContactEpisodes","ContactRefinement",
+        "ContactEvents","CrossingSensitivity","TurningPoints","CycleMetrics",
+        "RunConfiguration","DataGuide"]
+    names=vcat(filter(n->n in book.names,priority),filter(n->!(n in priority),book.names))
+    used=Set{String}(); indexrows=[]; firstsheet=true
+    for name in names
+        table=book.tables[name]; nr=length(table.rows); nc=length(table.header)
+        # Excel limits a sheet to 1,048,576 rows. Split within this same workbook.
+        maxrows=1_048_575
+        for part in 1:max(1,cld(nr,maxrows))
+            suffix=part==1 ? "" : "_$(part)"
+            clean=replace(name,r"[\[\]:*?/\\]"=>"_")
+            sheetname=first(clean,min(length(clean),31-length(suffix)))*suffix
+            if sheetname in used
+                error("Duplicate Excel sheet name: $sheetname")
+            end
+            push!(used,sheetname)
+            sh=firstsheet ? xf[1] : XLSX.addsheet!(xf,sheetname)
+            firstsheet && XLSX.rename!(sh,sheetname); firstsheet=false
+            lo=(part-1)*maxrows+1; hi=min(nr,part*maxrows)
+            sh[1,1:nc]=reshape(table.header,1,:)
+            for (j,row) in enumerate(table.rows[lo:hi])
+                for k in 1:nc;sh[j+1,k]=workbook_value(row[k]);end
+            end
+            XLSX.setUniformFont(sh,1,1:nc;name="Arial",size=10,bold=true,color="white")
+            XLSX.setUniformFill(sh,1,1:nc;pattern="solid",fgColor="FF243B53")
+            XLSX.setAlignment(sh,1,1:nc;wrapText=true,vertical="center",horizontal="center")
+            XLSX.setRowHeight(sh,1,1;height=32)
+            for k in 1:nc
+                XLSX.setColumnWidth(sh,k;width=clamp(length(table.header[k])+3,18,42))
+            end
+            if nc==2 && table.header[1]=="quantity"
+                XLSX.setColumnWidth(sh,1;width=66);XLSX.setColumnWidth(sh,2;width=70)
+            end
+            if name=="DataGuide"
+                XLSX.setColumnWidth(sh,1;width=30);XLSX.setColumnWidth(sh,2;width=110)
+                XLSX.setAlignment(sh,2:nr+1,2;wrapText=true,vertical="center")
+                for j in 1:nr;XLSX.setRowHeight(sh,j+1,1;height=max(30,16*ceil(length(string(table.rows[j][2]))/120)+8));end
+            elseif nc==2 && table.header[1]=="quantity"
+                XLSX.setAlignment(sh,2:nr+1,2;wrapText=true)
+                for j in 1:nr
+                    table.rows[j][2] isa AbstractString && length(table.rows[j][2])>68 &&
+                        XLSX.setRowHeight(sh,j+1,1;height=34)
+                end
+            end
+            nr>20 && XLSX.freezePanes(sh;nrows=1,ncols=1)
+            push!(indexrows,(sheetname,hi-lo+1,nc))
+        end
+    end
+    sh=XLSX.addsheet!(xf,"WorkbookIndex")
+    sh[1,1:3]=["worksheet" "data_rows" "columns"]
+    for (j,row) in enumerate(indexrows);sh[j+1,1:3]=reshape(collect(row),1,:);end
+    XLSX.setColumnWidth(sh,1;width=36)
+    XLSX.setUniformFont(sh,1,1:3;bold=true)
+    mktempdir() do dir
+        staged=joinpath(dir,"run.xlsx");XLSX.writexlsx(staged,xf;overwrite=true)
+        bytes=read(staged);isempty(bytes) && error("Empty workbook export")
+        write(path,bytes)
+    end
+    println("Saved one workbook: ",path);flush(stdout)
+    path
+end
+
+const STATE_HEADERS=["x1_m","x2_m","v1_m_s","v2_m_s","Vout_V","Wbase_J",
+    "Wbias_J","ER_J","Dfilm_J","Dstruct_J","Dwall_J","throughput_J"]
+
+function store_trace!(book,name,tr;idx=eachindex(tr.t))
+    headers=vcat(["time_s"],STATE_HEADERS,
+        ["Q$(i)_$(k)_N" for k in FORCE_KEYS for i in 1:2],DIAG_KEYS)
+    values=vcat(tr.u,reshape(tr.F,24,length(tr.t)),tr.d)
+    booktable!(book,name,headers,[(tr.t[j],values[:,j]...) for j in idx])
+end
+
+# Contact diagnostics use the DENSE ODE solution, never the reduced plot data.
+# Nominal overlap on side r: delta=r*x2-gc. Positive delta is effective contact
+# deformation. h_tip=h_eff+softpos(-delta,eps_gap), so at delta=0 the modeled
+# fluid gap is h_eff+eps_gap/2, not exactly h_eff.
+
+function bisect_crossing(f,a,b;tol=1e-13)
+    fa=f(a);fb=f(b)
+    fa==0 && return a
+    fb==0 && return b
+    signbit(fa)==signbit(fb) && error("Root is not bracketed")
+    for _ in 1:70
+        b-a<=max(tol,8*eps(max(abs(a),abs(b)))) && break
+        c=(a+b)/2;fc=f(c)
+        fc==0 && return c
+        if signbit(fc)==signbit(fa);a=c;fa=fc;else;b=c;end
+    end
+    (a+b)/2
+end
+
+"""Strict crossings: a touch and return is not counted as two crossings.
+Zero-valued samples are bridged and count only when the flanking signs differ.
+Events exactly at simulation endpoints are excluded (no two-sided evidence).
+"""
+function level_crossings(t,y,level,f;tol=1e-13)
+    out=Tuple{Float64,Int}[];last=0
+    for j in eachindex(t)
+        z=y[j]-level
+        z==0 && continue
+        if last>0 && signbit(z)!=signbit(y[last]-level)
+            root=bisect_crossing(s->f(s)-level,t[last],t[j];tol)
+            t[1]+tol < root < t[end]-tol && push!(out,(root,z>0 ? 1 : -1))
+        end
+        last=j
+    end
+    out
+end
+
+function scan_contact(run,options;nsub=options.contact_subdivisions)
+    @assert nsub>=2
+    ts=run.sol.t
+    tt=Vector{Float64}(undef,nsub*(length(ts)-1)+1);k=1
+    for j in 2:length(ts), s in 0:nsub-1
+        tt[k]=ts[j-1]+(ts[j]-ts[j-1])*s/nsub;k+=1
+    end
+    tt[end]=ts[end]
+    xs=Vector{Float64}(undef,length(tt));vs=similar(xs)
+    for j in eachindex(tt)
+        z=run.sol(tt[j]);xs[j]=z[2]*run.scale[2];vs[j]=z[4]*run.scale[4]
+    end
+    x(t)=run.sol(t)[2]*run.scale[2]
+    v(t)=run.sol(t)[4]*run.scale[4]
+    turns=level_crossings(tt,vs,0.0,v;tol=options.contact_time_tol)
+    # Add located velocity zeros so a resolved excursion crossing a level twice
+    # is partitioned before roots are sought. This is not a mathematical proof
+    # against arbitrarily fast unresolved oscillations; compare scan refinements.
+    knots=sort!(unique!(vcat(tt,first.(turns))))
+    xx=[x(t) for t in knots]
+    band=options.contact_band
+    db=sort!(unique!(vcat(options.crossing_deadband,[0.01e-9,0.1e-9,1e-9])))
+    levels=sort!(unique!(vcat(-band,0.0,-db,db)))
+    events=NamedTuple[]
+    for r in (-1,1), level in levels
+        f(t)=r*x(t)-run.model.gc
+        for (t,direction) in level_crossings(knots,r.*xx.-run.model.gc,level,f;tol=options.contact_time_tol)
+            push!(events,(time=t,side=r,level=level,direction=direction,velocity=r*v(t)))
+        end
+    end
+    sort!(events;by=e->(e.time,e.side,e.level))
+    turning=NamedTuple[]
+    for (t,direction) in turns, r in (-1,1)
+        delta=r*x(t)-run.model.gc
+        delta>=-band || continue
+        push!(turning,(time=t,side=r,delta=delta,kind=r*direction<0 ? "maximum" : "minimum",
+            region=delta>0 ? "nominal_contact" : "outside_nominal_contact"))
+    end
+    (;events,turning,deadbands=db,nsub)
+end
+
+function deadband_events(run,scan,d)
+    out=NamedTuple[]
+    for r in (-1,1)
+        state=r*run.sol(run.sol.t[1])[2]*run.scale[2]-run.model.gc>0 ? 1 : -1
+        for e in scan.events
+            e.side==r || continue
+            new=e.level==d && e.direction==1 ? 1 :
+                e.level==-d && e.direction==-1 ? -1 : 0
+            new!=0 && new!=state && (push!(out,e);state=new)
+        end
+    end
+    sort!(out;by=e->e.time)
+end
+
+function contact_episodes(run,scan,options)
+    out=NamedTuple[];m=run.model;t0=run.sol.t[1];tf=run.sol.t[end]
+    raw=filter(e->e.level==0,scan.events)
+    for r in (-1,1)
+        active=r*run.sol(t0)[2]*run.scale[2]-m.gc>=-options.contact_band
+        start=t0;left=active;ranges=Tuple{Float64,Float64,Bool,Bool}[]
+        for e in scan.events
+            e.side==r && e.level==-options.contact_band || continue
+            if e.direction==1 && !active
+                active=true;start=e.time;left=false
+            elseif e.direction==-1 && active
+                push!(ranges,(start,e.time,left,false));active=false
+            end
+        end
+        active && push!(ranges,(start,tf,left,true))
+        for (a,b,left,right) in ranges
+            ee=filter(e->e.side==r && a<=e.time<=b,raw)
+            turns=filter(e->e.side==r && a<=e.time<=b,scan.turning)
+            delta(t)=r*run.sol(t)[2]*run.scale[2]-m.gc
+            tx=vcat(a,b,run.sol.t[(run.sol.t.>=a).&(run.sol.t.<=b)],getproperty.(turns,:time))
+            peak=maximum(delta,tx)
+            peak>0 || continue # approached the band but never contacted
+            contacttime=0.0;bounds=vcat(a,getproperty.(ee,:time),b)
+            for j in 2:length(bounds)
+                delta((bounds[j-1]+bounds[j])/2)>0 && (contacttime+=bounds[j]-bounds[j-1])
+            end
+            intervals=diff(getproperty.(ee,:time))
+            entries=count(e->e.direction==1,ee);exits=count(e->e.direction==-1,ee)
+            push!(out,(id=0,side=r,start=a,stop=b,left_truncated=left,right_truncated=right,
+                raw_crossings=length(ee),entries=entries,exits=exits,reentries=max(0,entries-(delta(a)>0 ? 0 : 1)),
+                turning_in_contact=count(e->e.delta>0,turns),peak_overlap=peak,
+                contact_time=contacttime,min_crossing_interval=isempty(intervals) ? NaN : minimum(intervals)))
+        end
+    end
+    sort!(out;by=e->e.start)
+    [merge(e,(id=j,)) for (j,e) in enumerate(out)]
+end
+
+function event_agreement(a,b;time_tol=1e-10)
+    length(a)==length(b) || return (same=false,max_shift=NaN)
+    all((x.side,x.direction)==(y.side,y.direction) for (x,y) in zip(a,b)) ||
+        return (same=false,max_shift=NaN)
+    shift=isempty(a) ? 0.0 : maximum(abs(x.time-y.time) for (x,y) in zip(a,b))
+    (same=shift<=time_tol,max_shift=shift)
+end
+
+function contact_analysis(run,options)
+    println("  Resolving contact crossings and full episodes.");flush(stdout)
+    fine=scan_contact(run,options;nsub=2*options.contact_subdivisions)
+    coarse=scan_contact(run,options;nsub=options.contact_subdivisions)
+    raw=filter(e->e.level==0,fine.events);rawcoarse=filter(e->e.level==0,coarse.events)
+    agreement=event_agreement(raw,rawcoarse;time_tol=max(1e-10,10*options.contact_time_tol))
+    episodes=contact_episodes(run,fine,options)
+    book=run.book
+    booktable!(book,"ContactEvents",["time_s","side","event","normal_velocity_m_s"],
+        [(e.time,e.side,e.direction==1 ? "entry" : "exit",e.velocity) for e in raw])
+    booktable!(book,"TurningPoints",["time_s","side","overlap_m","turning_type","region"],
+        [(e.time,e.side,e.delta,e.kind,e.region) for e in fine.turning])
+    booktable!(book,"ContactEpisodes",["episode","side","start_s","end_s","left_truncated","right_truncated",
+        "raw_crossings","entries","exits","reentries","turns_in_contact","peak_overlap_m",
+        "time_in_nominal_contact_s","minimum_crossing_interval_s"],
+        [Tuple(e) for e in episodes])
+    sensitivity=[];counts=[]
+    tf=run.sol.t[end];tail=run.kind==:drive ? max(run.sol.t[1],tf-2/run.freq) : run.sol.t[1]
+    windows=run.kind==:drive ? [("full",run.sol.t[1],tf),("last_two_cycles",tail,tf)] : [("full",run.sol.t[1],tf)]
+    for (label,a,b) in windows, r in (-1,1)
+        ee=filter(e->e.side==r && a<=e.time<=b,raw)
+        turns=filter(e->e.side==r && a<=e.time<=b && e.delta>0,fine.turning)
+        dt=diff(getproperty.(ee,:time))
+        push!(counts,(label,r,length(ee),count(e->e.direction==1,ee),count(e->e.direction==-1,ee),
+            length(turns),isempty(dt) ? NaN : minimum(dt),agreement.same))
+        for d in fine.deadbands
+            de=filter(e->e.side==r && a<=e.time<=b,deadband_events(run,fine,d))
+            push!(sensitivity,(label,r,d,length(de),count(e->e.direction==1,de),count(e->e.direction==-1,de)))
+        end
+    end
+    booktable!(book,"ContactCounts",["window","side","raw_crossings","entries","exits",
+        "turns_while_in_contact","minimum_crossing_interval_s","dense_scan_agreement"],counts)
+    booktable!(book,"CrossingSensitivity",["window","side","deadband_m","confirmed_transitions","entries","exits"],sensitivity)
+    selected=NamedTuple[]
+    for r in (-1,1)
+        candidates=filter(e->e.side==r,episodes)
+        complete=filter(e->!e.left_truncated && !e.right_truncated,candidates)
+        !isempty(candidates) && push!(selected,isempty(complete) ? candidates[end] : complete[end])
+    end
+    (;scan=fine,raw,episodes,selected,agreement)
+end
+
+
+function contact_marker_lines!(ax,events,origin)
+    for (dir,col) in [(1,REVIEW_COLORS[3]),(-1,REVIEW_COLORS[2])]
+        tt=[(e.time-origin)*1e6 for e in events if e.direction==dir]
+        !isempty(tt) && CairoMakie.vlines!(ax,tt;color=(col,0.35),linestyle=:dot)
+    end
+end
+
+function review_contact_plots(run,analysis,dir,items,options)
+    m=run.model;p=m.p;book=run.book
+    raw=analysis.raw
+    f=review_figure("Boundary crossings and contact oscillations",
+        "Strict crossings of δ = r x₂ − gc = 0; turning points are counted separately";size=(1200,850))
+    ax=review_axis(f,1,1,"Entry and exit events","Time (s)","Electrode side r")
+    for (d,lab,mark,col) in [(1,"Entry",:utriangle,REVIEW_COLORS[3]),(-1,"Exit",:dtriangle,REVIEW_COLORS[2])]
+        ee=filter(e->e.direction==d,raw)
+        if !isempty(ee)
+            CairoMakie.scatter!(ax,getproperty.(ee,:time),getproperty.(ee,:side);label=lab,marker=mark,color=col,markersize=9)
+        end
+    end
+    !isempty(raw) && CairoMakie.axislegend(ax;labelsize=11,framevisible=false)
+    ax=review_axis(f,1,2,"Cumulative crossings on each side","Time (s)","Crossings")
+    for (k,r) in enumerate((-1,1))
+        ee=filter(e->e.side==r,raw)
+        xx=vcat(run.sol.t[1],getproperty.(ee,:time),run.sol.t[end])
+        yy=vcat(0,collect(1:length(ee)),length(ee))
+        CairoMakie.stairs!(ax,xx,yy;step=:post,label="r = $r",color=REVIEW_COLORS[k])
+    end
+    CairoMakie.axislegend(ax;labelsize=11,framevisible=false)
+    ax=review_axis(f,2,1,"Time between successive crossings","Later event time (s)","Crossing interval (μs)";yscale=log10)
+    haveinterval=false
+    for (k,r) in enumerate((-1,1))
+        ee=filter(e->e.side==r,raw);ts=getproperty.(ee,:time)
+        if length(ts)>1
+            CairoMakie.scatter!(ax,ts[2:end],diff(ts).*1e6;color=REVIEW_COLORS[k],label="r = $r",markersize=7)
+            haveinterval=true
+        end
+    end
+    haveinterval || CairoMakie.ylims!(ax,0.1,10.0)
+    ax=review_axis(f,2,2,"Counts within each full episode","Episode number", "Count")
+    es=analysis.episodes
+    if !isempty(es)
+        ids=getproperty.(es,:id)
+        CairoMakie.scatterlines!(ax,ids,getproperty.(es,:raw_crossings);label="Boundary crossings",color=REVIEW_COLORS[1],markersize=6)
+        CairoMakie.scatterlines!(ax,ids,getproperty.(es,:turning_in_contact);label="Turning points inside contact",color=REVIEW_COLORS[2],markersize=6)
+        CairoMakie.axislegend(ax;labelsize=10,framevisible=false)
+    else
+        CairoMakie.text!(ax,0.5,0.5;text="No nominal-contact episode detected",space=:relative,align=(:center,:center))
+    end
+    review_save(f,dir,"contact_crossings","Raw boundary crossings are distinct from velocity reversals while contact remains engaged. Dense-scan and solver-refinement results are recorded in the workbook.",items,options)
+    refinements=[]
+    for ep in analysis.selected
+        r=ep.side;side=r==1 ? "plus" : "minus"
+        a=max(run.sol.t[1],ep.start-options.contact_padding)
+        b=min(run.sol.t[end],ep.stop+options.contact_padding)
+        ee=filter(e->e.side==r && a<=e.time<=b,raw)
+        tt=sort!(unique!(vcat(collect(range(a,b;length=options.contact_points)),
+            run.sol.t[(run.sol.t.>=a).&(run.sol.t.<=b)],getproperty.(ee,:time),
+            [e.time for e in analysis.scan.turning if e.side==r && a<=e.time<=b])))
+        tr=review_trace(run,tt);u=tr.u;tx=(tt.-ep.start).*1e6;delta=r.*u[2,:].-m.gc
+        # No display reduction for these collision figures. Accepted solver steps
+        # and a dense supplementary grid are plotted in their actual time order.
+        localopts=PlotOptions(render_bins=max(options.render_bins,length(tt)),png_scale=options.png_scale)
+        status=ep.left_truncated || ep.right_truncated ? "clipped by simulation boundary" : "complete approach–contact–release"
+        subtitle=@sprintf("Episode %d; side r = %d; %s; %d crossings, %d in-contact turning points",
+            ep.id,r,status,ep.raw_crossings,ep.turning_in_contact)
+        f=review_figure("Full contact episode",subtitle;size=(1280,1080))
+        ax=review_axis(f,1,1,"Shuttle and tip relative to the contact boundary","Time from band entry (μs)","r x − gc (nm)")
+        review_lines!(ax,tx,[r.*u[1,:].-m.gc,delta],["Shuttle x₁","Tip x₂"];options=localopts,scale=1e9)
+        CairoMakie.hlines!(ax,[0.0];color=:black,linestyle=:dash)
+        ax=review_axis(f,1,2,"Nominal overlap δ: full contact dwell","Time from band entry (μs)","δ = r x₂ − gc (nm)")
+        review_lines!(ax,tx,[delta],[""];options=localopts,scale=1e9)
+        CairoMakie.hlines!(ax,[0.0];color=:black,linestyle=:dash)
+        CairoMakie.hlines!(ax,[-options.contact_band,options.contact_band].*1e9;color=(REVIEW_COLORS[5],0.8),linestyle=:dot)
+        contact_marker_lines!(ax,ee,ep.start)
+        ax=review_axis(f,2,1,"Tip clearance and effective fluid gap","Time from band entry (μs)","Gap (nm)")
+        h=p.h_eff.+softpos.(-delta,p.eps_gap)
+        review_lines!(ax,tx,[p.h_eff.-delta,h],["Raw geometric clearance","Regularized fluid gap"];options=localopts,scale=1e9)
+        CairoMakie.hlines!(ax,[p.h_eff*1e9];color=:black,linestyle=:dash,label="h_eff")
+        ax=review_axis(f,2,2,"Electrode bending relative to shuttle","Time from band entry (μs)","r (x₂ − x₁) (nm)")
+        review_lines!(ax,tx,[r.*(u[2,:]-u[1,:])],[""];options=localopts,scale=1e9)
+        ax=review_axis(f,3,1,"Velocities normal to this electrode","Time from band entry (μs)","Velocity (mm/s)")
+        review_lines!(ax,tx,[r.*u[3,:],r.*u[4,:],r.*(u[4,:]-u[3,:])],["r v₁","r v₂","r (v₂ − v₁)"];options=localopts,scale=1e3)
+        ax=review_axis(f,3,2,"Forces on the tip coordinate","Time from band entry (μs)","Normal generalized force (μN)")
+        review_lines!(ax,tx,[r.*vec(tr.F[2,k,:]) for k in (3,6,7,8,11)],
+            ["Bending","Contact","Electrostatic","Fluid","Net"];options=localopts,scale=1e6)
+        review_save(f,dir,"contact_episode_"*side,
+            "δ=0 is nominal contact. Orange ±band lines are diagnostic window bounds, not extra force switches. The full episode retains all accepted solver points. Gap floor h_eff is approached smoothly.",items,options)
+        store_trace!(book,"Episode_"*side,tr)
+        booktable!(book,"Seam_"*side,["time_s","time_from_band_entry_s","side","nominal_overlap_m",
+            "raw_tip_clearance_m","effective_tip_gap_m","normal_root_offset_m","normal_relative_bending_m","normal_tip_velocity_m_s"],
+            [(tt[j],tt[j]-ep.start,r,delta[j],p.h_eff-delta[j],h[j],r*u[1,j]-m.gc,
+                r*(u[2,j]-u[1,j]),r*u[4,j]) for j in eachindex(tt)])
+        f=review_figure("Contact seam and ringing",subtitle;size=(1280,870))
+        ax=review_axis(f,1,1,"Full episode at the seam","Time from band entry (μs)","δ = r x₂ − gc (nm)")
+        core=findall(t->ep.start<=t<=ep.stop,tt)
+        CairoMakie.lines!(ax,tx[core],delta[core].*1e9;color=REVIEW_COLORS[1])
+        CairoMakie.hlines!(ax,[0.0];color=:black,linestyle=:dash)
+        CairoMakie.hlines!(ax,[-options.contact_band,options.contact_band].*1e9;color=REVIEW_COLORS[5],linestyle=:dot)
+        contact_marker_lines!(ax,ee,ep.start)
+        ax=review_axis(f,1,2,"Phase portrait at the seam","δ = r x₂ − gc (nm)","Normal tip velocity r v₂ (mm/s)")
+        CairoMakie.lines!(ax,delta[core].*1e9,r.*u[4,core].*1e3;color=REVIEW_COLORS[1],linewidth=1.2)
+        CairoMakie.vlines!(ax,[0.0];color=:black,linestyle=:dash)
+        for (d,col,mark) in [(1,REVIEW_COLORS[3],:utriangle),(-1,REVIEW_COLORS[2],:dtriangle)]
+            ev=filter(e->e.direction==d,ee)
+            !isempty(ev) && CairoMakie.scatter!(ax,zeros(length(ev)),getproperty.(ev,:velocity).*1e3;color=col,marker=mark,markersize=10)
+        end
+        for (col,name,center) in [(1,"Entry and initial ringing",isempty(ee) ? ep.start : ee[1].time),
+                                  (2,"Release and final approach",isempty(ee) ? ep.stop : ee[end].time)]
+            zoom=min(options.contact_zoom,0.25*(ep.stop-ep.start))
+            pad=min(options.contact_padding,0.08*(ep.stop-ep.start))
+            lo=col==1 ? center-pad : center-zoom
+            hi=col==1 ? center+zoom : center+pad
+            jj=findall(t->lo<=t<=hi,tt)
+            ax=review_axis(f,2,col,name,"Time relative to selected crossing (μs)","Nominal overlap δ (nm)")
+            if length(jj)>1
+                CairoMakie.lines!(ax,(tt[jj].-center).*1e6,delta[jj].*1e9;color=REVIEW_COLORS[1])
+                CairoMakie.hlines!(ax,[0.0];color=:black,linestyle=:dash)
+                CairoMakie.hlines!(ax,[-options.crossing_deadband,options.crossing_deadband].*1e9;color=(REVIEW_COLORS[2],0.6),linestyle=:dot)
+                contact_marker_lines!(ax,filter(e->lo<=e.time<=hi,ee),center)
+            end
+        end
+        review_save(f,dir,"contact_seam_"*side,
+            "Seam time history and phase portrait follow the supplied reference plots. Green/orange markers indicate entry/exit. Insets use the configured time span and show the diagnostic deadband. Dense output cannot certify absence of unresolved faster motion.",items,options)
+        # Electrode geometry reconstructed using the same reduced beam shape.
+        peakidx=argmax(delta);entry=isempty(ee) ? a : ee[1].time;release=isempty(ee) ? b : ee[end].time
+        sampletimes=[a,entry,tt[peakidx],release,b]
+        labs=["Approach","First crossing","Maximum overlap","Last crossing","Departure"]
+        f=review_figure("Electrode shape and gap through contact",@sprintf("Side r = %d; model beam shape and spatially varying residual gap",r);size=(1280,870))
+        ax1=review_axis(f,1,1,"Reduced electrode displacement profile","Distance from tip y (μm)","r w(y) − gc (nm)")
+        ax2=review_axis(f,1,2,"Effective gap along electrode","Distance from tip y (μm)","Effective gap (nm)";yscale=log10)
+        ax3=review_axis(f,2,1,"Tip-neighborhood gap","Distance from tip y (μm)","Effective gap (nm)")
+        ax4=review_axis(f,2,2,"Realized contact force path","Nominal overlap δ (nm)","Normal contact force (μN)")
+        geometryrows=[]
+        for (j,t) in enumerate(sampletimes)
+            u0=run.sol(t).*run.scale;w=m.B1.*u0[1].+m.B2.*u0[2]
+            rawgap=m.gc .+m.alpha.*m.y.-r.*w
+            gap=p.h_eff.+softpos.(rawgap,p.eps_gap)
+            col=REVIEW_COLORS[j]
+            CairoMakie.lines!(ax1,m.y.*1e6,(r.*w.-m.gc).*1e9;color=col,label=labs[j])
+            CairoMakie.lines!(ax2,m.y.*1e6,gap.*1e9;color=col,label=labs[j])
+            ix=findall(<=(min(p.Leff,2e-6)),m.y)
+            CairoMakie.lines!(ax3,m.y[ix].*1e6,gap[ix].*1e9;color=col,label=labs[j])
+            append!(geometryrows,[(labs[j],t,r,m.y[k],w[k],p.h_eff+rawgap[k],gap[k]) for k in eachindex(m.y)])
+        end
+        CairoMakie.hlines!(ax1,[0.0];color=(:black,0.5),linestyle=:dash)
+        CairoMakie.axislegend(ax1;labelsize=9,position=:lt,framevisible=false)
+        CairoMakie.hlines!(ax2,[p.h_eff*1e9];color=:black,linestyle=:dash)
+        CairoMakie.hlines!(ax3,[p.h_eff*1e9];color=:black,linestyle=:dash)
+        CairoMakie.lines!(ax4,delta.*1e9,r.*vec(tr.F[2,6,:]).*1e6;color=REVIEW_COLORS[1])
+        CairoMakie.vlines!(ax4,[0.0];color=:black,linestyle=:dash)
+        review_save(f,dir,"contact_geometry_"*side,
+            "The reconstructed beam follows w=B1*x1+B2*x2. The gap is evaluated at every spatial quadrature point. Penetration is effective compliant deformation, not an explicit resolved solid-contact mesh.",items,options)
+        booktable!(book,"Geometry_"*side,["stage","time_s","side","distance_from_tip_m","beam_displacement_m","raw_clearance_m","effective_gap_m"],geometryrows)
+    end
+    booktable!(book,"ContactRefinement",["episode","side","baseline_crossings","refined_crossings","event_agreement",
+        "maximum_event_time_shift_s","maximum_tip_difference_m","baseline_peak_overlap_m","refined_peak_overlap_m",
+        "refined_reltol","refined_scaled_abstol","refined_dtmax_s","event_time_tolerance_s"],refinements)
+    refinements
+end
+
+"""Consecutive crossings on one side, including rebounds leaving the narrow
+episode band, until the next opposite-side contact sequence begins."""
+function review_contact_sequences(run,analysis,dir,items,options)
+    sequences=Vector{Vector{eltype(analysis.raw)}}()
+    for e in analysis.raw
+        if isempty(sequences) || sequences[end][end].side!=e.side
+            push!(sequences,eltype(analysis.raw)[])
+        end
+        push!(sequences[end],e)
+    end
+    rows=[]
+    for (j,seq) in enumerate(sequences)
+        push!(rows,(j,seq[1].side,seq[1].time,seq[end].time,length(seq),
+            count(e->e.direction==1,seq),count(e->e.direction==-1,seq)))
+    end
+    booktable!(run.book,"ContactSequences",["sequence","side","first_crossing_s","last_crossing_s",
+        "raw_crossings","entries","exits"],rows)
+    refinements=[]
+    for r in (-1,1)
+        k=findlast(s->s[1].side==r,sequences);isnothing(k) && continue
+        seq=sequences[k];origin=seq[1].time
+        a=max(run.sol.t[1],origin-options.contact_padding)
+        b=min(run.sol.t[end],seq[end].time+options.contact_padding)
+        seq[1].direction==-1 && (a=run.sol.t[1])
+        seq[end].direction==1 && (b=run.sol.t[end])
+        lo=max(1,searchsortedlast(run.sol.t,a));hi=min(length(run.sol.t),searchsortedfirst(run.sol.t,b))
+        ii=lo:hi;tt=run.sol.t[ii];u=reduce(hcat,[run.sol.u[j].*run.scale for j in ii])
+        delta=r.*u[2,:].-run.model.gc;tx=(tt.-origin).*1e3
+        side=r==1 ? "plus" : "minus"
+        coverage=seq[1].direction==-1 || seq[end].direction==1 ? "clipped by simulation boundary" : "complete same-side sequence"
+        f=review_figure("Same-side contact sequence",
+            "Side r = $r; $(length(seq)) crossings; $coverage; includes early rebounds";size=(1280,880))
+        ax=review_axis(f,1,1,"Shuttle and tip through all same-side returns","Time from first crossing (ms)","r x − gc (nm)")
+        CairoMakie.lines!(ax,tx,(r.*u[1,:].-run.model.gc).*1e9;label="Shuttle x₁",color=REVIEW_COLORS[1])
+        CairoMakie.lines!(ax,tx,delta.*1e9;label="Tip x₂",color=REVIEW_COLORS[2])
+        CairoMakie.hlines!(ax,[0.0];color=:black,linestyle=:dash)
+        CairoMakie.axislegend(ax;labelsize=11,framevisible=false)
+        ax=review_axis(f,1,2,"Tip overlap for the complete sequence","Time from first crossing (ms)","Nominal overlap δ (nm)")
+        CairoMakie.lines!(ax,tx,delta.*1e9;color=REVIEW_COLORS[1])
+        CairoMakie.hlines!(ax,[0.0];color=:black,linestyle=:dash)
+        for (d,col) in [(1,REVIEW_COLORS[3]),(-1,REVIEW_COLORS[2])]
+            CairoMakie.vlines!(ax,[(e.time-origin)*1e3 for e in seq if e.direction==d];color=(col,0.4),linestyle=:dot)
+        end
+        early=findall(t->t<=origin+max(2*options.contact_zoom,1e-3),tt)
+        ax=review_axis(f,2,1,"Initial rebounds and repeated contact loss","Time from first crossing (μs)","Nominal overlap δ (nm)")
+        CairoMakie.lines!(ax,(tt[early].-origin).*1e6,delta[early].*1e9;color=REVIEW_COLORS[1])
+        CairoMakie.hlines!(ax,[0.0];color=:black,linestyle=:dash)
+        contact_marker_lines!(ax,filter(e->e.time<=tt[early[end]],seq),origin)
+        ax=review_axis(f,2,2,"Phase portrait including every rebound","Nominal overlap δ (nm)","Normal tip velocity (mm/s)")
+        CairoMakie.lines!(ax,delta.*1e9,r.*u[4,:].*1e3;color=REVIEW_COLORS[1],linewidth=1.1)
+        CairoMakie.vlines!(ax,[0.0];color=:black,linestyle=:dash)
+        review_save(f,dir,"contact_sequence_"*side,
+            "This larger window includes all consecutive boundary crossings on the same side before an opposite-side contact. Curves retain every accepted solver state; root-refined crossings are marked separately. It complements the narrower band-defined episode.",items,options)
+        booktable!(run.book,"Sequence_"*side,vcat(["time_s"],STATE_HEADERS),[(tt[j],u[:,j]...) for j in eachindex(tt)])
+        if options.refine_contact
+            println("  Refining full contact sequence ",k," (side ",r,") including all rebounds.");flush(stdout)
+            m=run.model;scale=run.scale
+            function f!(dz,z,ctx,t);rhs!(dz,z.*scale,ctx,t);dz./=scale;nothing;end
+            prob=SciMLBase.ODEProblem(f!,copy(run.sol.u[lo]),(tt[1],tt[end]),(m,run.acceleration))
+            rt=run.metrics["reltol"]/5;at=run.metrics["scaled_abstol"]/5;dt=run.metrics["dtmax_s"]/2
+            sol=SciMLBase.solve(prob,OrdinaryDiffEqRosenbrock.Rodas5P(autodiff=ADTypes.AutoFiniteDiff());
+                reltol=rt,abstol=at,dtmax=dt,maxiters=10^7,save_everystep=true,dense=true)
+            SciMLBase.successful_retcode(sol) || error("Sequence refinement integration failed")
+            isapprox(sol.t[end],tt[end];rtol=1e-12) || error("Sequence refinement stopped early")
+            fine=scan_contact(merge(run,(sol=sol,)),options;nsub=2*options.contact_subdivisions)
+            fe=filter(e->e.level==0 && e.side==r,fine.events)
+            baseline=filter(e->e.side==r && tt[1]<=e.time<=tt[end],analysis.raw)
+            agreement=event_agreement(baseline,fe;time_tol=options.refinement_event_tol)
+            xf=[sol(t)[2]*scale[2] for t in tt];xb=vec(u[2,:]);err=maximum(abs.(xf-xb))
+            push!(refinements,(k,r,length(baseline),length(fe),agreement.same,agreement.max_shift,
+                err,maximum(r.*xb.-m.gc),maximum(r.*xf.-m.gc),rt,at,dt,options.refinement_event_tol))
+            f=review_figure("Full-sequence solver-refinement comparison",
+                "Side r = $r; all rebounds included; same initial state; tolerances / 5 and dtmax / 2";size=(1200,760))
+            ax=review_axis(f,1,1,"Contact overlap on the baseline accepted-step grid","Time from replay start (ms)","Nominal overlap (nm)")
+            xx=(tt.-tt[1]).*1e3
+            CairoMakie.lines!(ax,xx,(r.*xb.-m.gc).*1e9;label="Baseline",color=REVIEW_COLORS[1])
+            CairoMakie.lines!(ax,xx,(r.*xf.-m.gc).*1e9;label="Refined",color=REVIEW_COLORS[2],linestyle=:dash)
+            CairoMakie.axislegend(ax;labelsize=11,framevisible=false)
+            ax=review_axis(f,1,2,"Refined minus baseline at accepted-step times","Time from replay start (ms)","r Δx₂ (pm)")
+            CairoMakie.lines!(ax,xx,r.*(xf-xb).*1e12;color=REVIEW_COLORS[3])
+            review_save(f,dir,"contact_refinement_"*side,
+                "The full same-side sequence is replayed from the same accepted initial state, including rebounds outside the narrow contact band. Counts use dense root searches; plotted errors use baseline accepted-step times. Physical parameters and film panels are unchanged.",items,options)
+            booktable!(run.book,"RefinementTrace_"*side,["time_s","baseline_x2_m","refined_x2_m","difference_m"],
+                [(tt[j],xb[j],xf[j],xf[j]-xb[j]) for j in eachindex(tt)])
+            booktable!(run.book,"RefinementEvents_"*side,["time_s","side","event","normal_velocity_m_s"],
+                [(e.time,e.side,e.direction==1 ? "entry" : "exit",e.velocity) for e in fe])
+        end
+    end
+    booktable!(run.book,"ContactRefinement",["sequence","side","baseline_crossings","refined_crossings","event_agreement",
+        "maximum_event_time_shift_s","maximum_tip_difference_at_saved_times_m","baseline_peak_overlap_at_saved_times_m","refined_peak_overlap_at_saved_times_m",
+        "refined_reltol","refined_scaled_abstol","refined_dtmax_s","event_time_tolerance_s"],refinements)
+    refinements
+end
+
+
 function makeplots(run;options=PlotOptions())
+    task_local_storage(:MEMS_review_book,run.book) do
+        _makeplots(run;options)
+    end
+end
+function _makeplots(run;options=PlotOptions())
     @assert options.full_points>=101 && options.tail_points>=101 && options.render_bins>=50
     @assert options.sweep_points>=51 && options.surface_positions>=31 && options.surface_velocities>=11
     @assert options.png_scale>0 && options.recurrence_tol>0
+    @assert options.contact_band>0 && options.crossing_deadband>0 && options.contact_subdivisions>=2
+    @assert options.contact_points>=101 && options.contact_time_tol>0 && options.contact_padding>=0
+    @assert options.contact_zoom>0 && options.refinement_event_tol>0
     CairoMakie.activate!()
     dir=joinpath(run.outdir,"plots");mkpath(dir)
     items=NamedTuple{(:name,:caption),Tuple{String,String}}[]
@@ -908,18 +1460,22 @@ function makeplots(run;options=PlotOptions())
         collect(range(tail,tf;length=options.tail_points)))
     tr=review_trace(run,times)
     cycles=review_cycles(run,options,dir,items)
-    events=review_events(run,tr.t,dir)
+    contacts=contact_analysis(run,options)
+    events=contacts.raw
     review_window_plots(run,tr,eachindex(tr.t),"Full simulation","full",dir,items,options)
     suffix=run.kind==:drive ? "last_two_cycles" : "final_transient"
     review_window_plots(run,tr,findall(>=(tail),tr.t),cycles.label,suffix,dir,items,options)
-    # One high-resolution event window complements full-run / two-cycle views.
-    entries=filter(e->e[3]=="entry",events)
+    entries=filter(e->e.direction==1,events)
     if !isempty(entries)
-        te=entries[end][1];a=max(t0,te-30e-6);b=min(tf,te+150e-6)
+        te=entries[end].time;a=max(t0,te-30e-6);b=min(tf,te+150e-6)
         etimes=vcat(collect(range(a,b;length=1601)),run.sol.t[(run.sol.t.>=a).&(run.sol.t.<=b)])
         etr=review_trace(run,etimes)
-        review_window_plots(run,etr,eachindex(etr.t),"Last detected contact entry: detailed window","contact_detail",dir,items,options)
+        review_window_plots(run,etr,eachindex(etr.t),
+            "Last entry: short diagnostic window; full episode shown separately","contact_detail",dir,items,options)
+        store_trace!(run.book,"ContactDetail",etr)
     end
+    review_contact_plots(run,contacts,dir,items,options)
+    refinements=review_contact_sequences(run,contacts,dir,items,options)
     maps=review_force_maps(run,tr,dir,items,options)
     # Common CSV grid retains extrema of EVERY exported variable in each time bin.
     values=vcat(tr.u,reshape(tr.F,24,length(tr.t)),tr.d)
@@ -931,7 +1487,7 @@ function makeplots(run;options=PlotOptions())
     jt=review_indices(tr.t[ti],[view(values,k,ti) for k in axes(values,1)];bins=options.render_bins)
     writecsv(joinpath(dir,"diagnostics_"*suffix*".csv"),headers,[(tr.t[j],values[:,j]...) for j in ti[jt]])
     diag=Dict{String,Any}(
-        "kind"=>string(run.kind),"frequency_Hz"=>run.freq,"time_start_s"=>t0,"time_end_s"=>tf,
+        "kind"=>string(run.kind),"frequency_Hz"=>(run.kind==:drive ? run.freq : 0.0),"configured_frequency_Hz"=>run.freq,"time_start_s"=>t0,"time_end_s"=>tf,
         "tail_start_s"=>tail,"recurrence_label"=>cycles.label,"detected_recurrence_period"=>cycles.period,
         "recurrence_tolerance"=>options.recurrence_tol,"contact_events_detected"=>length(events),
         "diagnostic_samples_before_render_reduction"=>length(tr.t),"csv_full_samples"=>length(ii),
@@ -945,21 +1501,49 @@ function makeplots(run;options=PlotOptions())
         "sweep_signed_speed_limit_m_s"=>maps.speed,"sweep_bending_limit_m"=>maps.bending_limit,
         "figures"=>length(items),"PNG_pixels_per_figure_unit"=>options.png_scale,
         "PDF_3D_surface_note"=>"Surface layers are rasterized; text and axes remain vector.")
-    open(joinpath(dir,"review_summary.toml"),"w") do io;TOML.print(io,diag);end
+    diag["raw_crossing_scan_agreement"]=contacts.agreement.same
+    diag["raw_crossing_scan_max_time_shift_s"]=contacts.agreement.max_shift
+    diag["complete_contact_episodes"]=count(e->!e.left_truncated && !e.right_truncated,contacts.episodes)
+    diag["local_refinement_performed"]=!isempty(refinements)
+    diag["local_refinement_scope"]="Complete last same-side sequence, including rebounds outside the narrow contact band"
+    diag["local_refinement_events_agree"]=isempty(refinements) ? "not performed" : all(row[5] for row in refinements)
+    bookmetadata!(run.book,"Summary",merge(Dict{String,Any}(run.metrics),diag))
     metadata=Dict("parameters"=>Dict(string(k)=>getfield(run.model.p,k) for k in fieldnames(Params)),
-        "run"=>Dict("tag"=>run.tag,"kind"=>string(run.kind),"frequency_Hz"=>run.freq,"film_panels"=>run.model.panels,
-            "acceleration_amplitude_m_s2"=>run.acceleration_amplitude,"julia_version"=>string(VERSION),
+        "run"=>Dict("tag"=>run.tag,"kind"=>string(run.kind),"frequency_Hz"=>(run.kind==:drive ? run.freq : 0.0),"configured_frequency_Hz"=>run.freq,"film_panels"=>run.model.panels,
+            "acceleration_amplitude_m_s2"=>run.acceleration_amplitude,"forcing_alpha_g"=>run.acceleration_amplitude/9.80665,"julia_version"=>string(VERSION),
             "plotting_package_version"=>string(Base.pkgversion(CairoMakie))),
         "derived_model"=>Dict("nominal_contact_travel_m"=>run.model.gc,"gap_slope"=>run.model.alpha,
             "electrode_stiffness_N_m"=>run.model.ke,"M11_kg"=>run.model.M[1,1],
             "M12_kg"=>run.model.M[1,2],"M22_kg"=>run.model.M[2,2]),
         "solver_metrics"=>run.metrics,"plot_options"=>Dict(string(k)=>getfield(options,k) for k in fieldnames(PlotOptions) if !isnothing(getfield(options,k))))
-    open(joinpath(run.outdir,"run_configuration.toml"),"w") do io;TOML.print(io,metadata);end
+    bookmetadata!(run.book,"RunConfiguration",metadata)
+    booktable!(run.book,"DataGuide",["topic","definition"],[
+        ("Source","Computed by collision_model_corrected.jl; SI units are named in each data column."),
+        ("Forcing alpha","Peak acceleration divided by standard gravity 9.80665 m/s^2; distinct from the geometric gap slope."),
+        ("Nominal boundary","gc = g0 - 2*Tp - h_eff; delta = r*x2 - gc, r = -1 or +1."),
+        ("Fluid gap at nominal contact","h_tip = h_eff + softpos(-delta, eps_gap); at delta=0 this is h_eff+eps_gap/2."),
+        ("Contact law","Smooth compliant force; nominal crossings cause no reset, impact map, or switching callback."),
+        ("Episode","Connected excursion above delta=-contact_band that reaches delta>0, including all recrossings before departure."),
+        ("Selected plots","Last complete episode on each side; a clipped episode is used and labeled only if no complete one exists."),
+        ("Raw crossing","Opposite signs around delta=0, root-refined on the dense ODE solution. A touch-and-return is excluded."),
+        ("Turning point","A sign change of v2. Turning while delta>0 indicates oscillation without necessarily losing nominal contact."),
+        ("Deadband count","Schmitt count: confirm entry at +d, exit at -d. d changes only diagnostics. Initial state uses the sign of delta at simulation start."),
+        ("Dense scan check","Compare 4 and 8 subdivisions per accepted step by default, with located velocity zeros added. Not a proof of resolving arbitrarily fast motion."),
+        ("Local refinement","Replay each last same-side sequence, including all rebounds, from the identical accepted starting state with rtol/5, atol/5, dtmax/2."),
+        ("Numerical chatter","Counts alone do not identify numerical chatter. Inspect refinement, excursion sizes, inter-crossing intervals and smoothing sensitivity."),
+        ("AcceptedStates","All accepted solver states, without display reduction. Large tables split across sheets within this workbook."),
+        ("DiagnosticsFull","Forces and diagnostics on an extrema-preserving review grid. All accepted states are separately retained."),
+        ("Episode data","Accepted ODE steps plus dense sample times and located crossings/turns. No display reduction in contact plots."),
+        ("Contact sequences","Consecutive boundary crossings on the same side before an opposite-side crossing. Sequence plots retain all accepted states."),
+        ("Nonfinite values","NaN and Inf are text, not zero. NaN denotes unavailable comparisons; Inf can denote a disabled hard stop."),
+        ("Parameters","Recorded simulation inputs. Editing workbook cells does not rerun the Julia simulation."),
+        ("Workbook library","https://juliadata.org/XLSX.jl/stable/"),
+        ("Dense ODE solution","https://docs.sciml.ai/DiffEqDocs/stable/basics/solution/")])
     escapehtml(s)=replace(string(s),'&'=>"&amp;",'<'=>"&lt;",'>'=>"&gt;",'"'=>"&quot;")
     open(joinpath(dir,"index.html"),"w") do io
         println(io,"<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>MEMS run review</title><style>body{font:16px/1.55 system-ui;margin:32px auto;max-width:1200px;padding:0 20px;color:#17293a;background:#f6f8fa}h1,h2{line-height:1.2}article{background:white;padding:22px;margin:24px 0;border:1px solid #d9e1e8;border-radius:8px}img{width:100%;height:auto}a{color:#006ba0}code{background:#edf1f4;padding:2px 5px}.note{padding:18px;background:#e9f2f7}nav{columns:2}li{margin:6px 0}</style></head><body>")
         println(io,"<h1>MEMS simulation review</h1><p>",escapehtml(run.tag)," · ",escapehtml(cycles.label),"</p><div class='note'>All physical states, force components, integrated work/loss states, and constitutive maps are generated from the Julia model. Final-cycle recurrence is a numerical check, not experimental validation or a stability proof. Map captions specify the held coordinates and voltage.</div>")
-        println(io,"<p><a href='review_summary.toml'>Diagnostic summary</a> · <a href='diagnostics_full.csv'>Full-run data</a> · <a href='diagnostics_",suffix,".csv'>Final-window data</a> · <a href='contact_events.csv'>Contact events</a> · <a href='../run_configuration.toml'>Run parameters</a></p><nav><ol>")
+        println(io,"<p><a href='../",escapehtml(basename(run.outdir)),".xlsx'>Download the complete run workbook</a> — all states, forces, contact counts, maps, parameters, and diagnostics.</p><nav><ol>")
         for it in items;println(io,"<li><a href='#",it.name,"'>",replace(it.name,'_'=>' '),"</a></li>");end
         println(io,"</ol></nav>")
         for it in items
@@ -968,7 +1552,7 @@ function makeplots(run;options=PlotOptions())
         println(io,"</body></html>")
     end
     println("Saved ",length(items)," figures (PDF + PNG). Open: ",joinpath(dir,"index.html"))
-    (;directory=dir,index=joinpath(dir,"index.html"),summary=diag)
+    (;directory=dir,index=joinpath(dir,"index.html"),summary=diag,contacts)
 end
 
 function main(args=ARGS)
@@ -976,25 +1560,31 @@ function main(args=ARGS)
     opts=Dict{String,String}();j=2
     while j<=length(args)
         key=args[j]
-        key in ("--cycles","--freq","--tag","--outdir") || error("Unknown option: $key")
+        key in ("--cycles","--freq","--tag","--outdir","--alpha","--bias","--dtmax","--rtol") || error("Unknown option: $key")
         j<length(args) || error("Missing value for $key")
         opts[key]=args[j+1];j+=2
     end
     cycles=parse(Float64,get(opts,"--cycles","10"))
     freq=parse(Float64,get(opts,"--freq","20"))
     outdir=get(opts,"--outdir",joinpath(@__DIR__,"results"))
-    if mode=="--verify";verify()
-    elseif mode=="--probe";simulate(;outdir,tag=get(opts,"--tag","probe"))
+    alpha=parse(Float64,get(opts,"--alpha","4.95"))
+    p=Params(Vbias=parse(Float64,get(opts,"--bias","3")))
+    rt=parse(Float64,get(opts,"--rtol","1e-7"))
+    dt=parse(Float64,get(opts,"--dtmax",mode=="--probe" ? "1e-6" : "2e-5"))
+    if mode=="--verify";verify(;outdir)
+    elseif mode=="--probe";simulate(;p,outdir,reltol=rt,dtmax=dt,tag=get(opts,"--tag","probe"))
     elseif mode=="--convergence";convergence(;outdir)
-    elseif mode=="--drive";simulate(;kind=:drive,cycles,freq,outdir,tag=get(opts,"--tag","drive"))
+    elseif mode=="--drive";simulate(;p,kind=:drive,cycles,freq,alpha,outdir,reltol=rt,dtmax=dt,tag=get(opts,"--tag","drive"))
     elseif mode=="--help"
         println("""
         julia --project=. collision_model_corrected.jl [MODE] [OPTIONS]
         No arguments: a ten-cycle driven simulation with automatic PDF/PNG plots.
         Modes: --drive | --probe | --convergence | --verify | --help
-        Drive options: --cycles 30 --freq 20 --tag my_run --outdir results
+        Drive options: --cycles 30 --freq 20 --alpha 4.95 --bias 3 --tag my_run --outdir results
+        Solver options: --rtol 1e-7 --dtmax 2e-5
         --verify performs algebraic checks only; it does not fabricate a trajectory.
-        Every simulation writes a new timestamped folder and plots/index.html.
+        Every simulation writes RUN_Ag_BV_CHz (repeat suffix __02, etc.), one XLSX workbook,
+        and plots/index.html with PDF/PNG figures. Contact refinement is on by default.
         See README.md for VS Code setup and PlotOptions for force-map controls.
         """)
     else;error("Unknown mode: $mode")

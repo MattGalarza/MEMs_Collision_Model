@@ -369,7 +369,7 @@ function simulate(;kwargs...)
     end
 end
 function _simulate(;p=Params(),panels=512,kind=:probe,cycles=10,freq=20.0,
-        alpha=4.95,acceleration=nothing,reltol=1e-7,abstol=1e-10,
+        alpha=1.8,acceleration=nothing,reltol=1e-7,abstol=1e-10,
         dtmax=kind==:probe ? 1e-6 : 2e-5,book=ReviewBook(),
         outdir=joinpath(@__DIR__,"results"),tag=string(kind),plot_options=PlotOptions())
     @assert kind in (:probe,:drive) && cycles>4 && freq>0

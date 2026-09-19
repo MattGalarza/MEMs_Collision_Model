@@ -3,7 +3,7 @@
 # Julia-only implementation and numerical verification. See the companion TeX.
 # Run: julia collision_model_corrected.jl --verify
 # Default: julia --project=. collision_model_corrected.jl (10-cycle drive + plots)
-# More: --probe | --drive --cycles 30 | --convergence | --help
+# More: --probe | --drive --cycles 30 | --convergence | --help 
 module CorrectedMEMS
 using LinearAlgebra, Printf, Test, Dates, TOML
 export Params, Model, PlotOptions, constitutive, rhs!, energy, verify, simulate, convergence, makeplots
@@ -351,7 +351,7 @@ function simulate(;kwargs...)
     Base.invokelatest(_simulate;kwargs...)
 end
 function _simulate(;p=Params(),panels=512,kind=:probe,cycles=10,freq=20.0,
-        acceleration=4.95*9.80665,reltol=1e-7,abstol=1e-10,
+        acceleration=1.9*9.80665,reltol=1e-7,abstol=1e-10,
         outdir=joinpath(@__DIR__,"results"),tag=string(kind),plot_options=PlotOptions())
     @assert kind in (:probe,:drive) && cycles>4 && freq>0
     @assert occursin(r"^[A-Za-z0-9_-]+$",tag) "Use letters, digits, underscores or hyphens in tag"

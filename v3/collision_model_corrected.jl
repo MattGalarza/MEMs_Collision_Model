@@ -975,7 +975,8 @@ function save_workbook(book,path)
                         XLSX.setRowHeight(sh,j+1,1;height=34)
                 end
             end
-            nr>20 && XLSX.freezePanes(sh;nrows=1,ncols=1)
+            # Leave panes unfrozen: freezePanes is unavailable in some XLSX.jl
+            # installations. Cosmetic header freezing must not block data export.
             push!(indexrows,(sheetname,hi-lo+1,nc))
         end
     end

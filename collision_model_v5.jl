@@ -1061,4 +1061,265 @@ else
                 m.overlap_max*1e9, m.bending_max*1e9, m.Fw_max*1e6)
     end
 end
- 
+
+
+
+
+#-------------------------------------------------------------------
+#-------------------------------------------------------------------
+#-------------------------------------------------------------------
+
+using Plots, Printf
+
+"""
+    animate_electrode_contact(sol, p, zscale; frequency, outfile, kwargs...)
+
+Animate the last two forcing cycles of the existing SCALED solution. No new
+simulation is run. Root = state 1, tip = state 3; both are restored to SI units.
+Beam shape: w(s,t) = (1-phi(s))*x1(t) + phi(s)*x2(t), using AnalyticalModel.bshape.
+
+`window=(ta,tb)` selects an explicit interval in seconds, useful for slow motion.
+`seconds=10, fps=30` makes 300 frames. The movie is an overview, not a count of
+contact crossings; very fast rebounds need a narrow window / more frames.
+`frame_times` optionally supplies increasing physical times for variable-speed
+playback. Use `animate_electrode_cycle` below for both wall visits of one cycle.
+The diagram compresses the vertical dimension; horizontal geometry is in µm.
+Orange means nominal contact, r*x2 >= gc. The tiny residual film is reported
+numerically, and the tip is NEVER clamped or snapped to a wall for display.
+`outfile` accepts .gif or .mp4; a first-frame PNG is also saved beside the movie.
+"""
+function animate_electrode_contact(sol, p, zscale;
+        frequency, cycles=2, window=nothing, seconds=10, fps=30,
+        outfile="electrode_last_two_cycles.gif", trace_dt=2e-6,
+        frame_times=nothing, visits=NamedTuple[])
+    @assert length(zscale) == length(sol.u[1]) >= 5
+    @assert frequency > 0 && cycles > 0 && seconds > 0 && fps >= 1 && trace_dt > 0
+    ta, tb = window === nothing ? (max(sol.t[1], sol.t[end]-cycles/frequency), sol.t[end]) : window
+    sol.t[1] <= ta < tb <= sol.t[end] || error("Animation window must lie inside sol.t.")
+    ext = lowercase(splitext(outfile)[2])
+    ext in (".gif", ".mp4") || error("Use a .gif or .mp4 output filename.")
+    window === nothing && tb-ta < (cycles/frequency)*(1-1e-10) &&
+        @warn "Solution is shorter than the requested cycle window; showing available time."
+    dst = abspath(outfile); mkpath(dirname(dst)); png = splitext(dst)[1]*"_preview.png"
+    si(t) = sol(t) .* zscale                     # IMPORTANT: recover physical states
+    times = frame_times === nothing ? collect(range(ta,tb;length=max(2,round(Int,seconds*fps)))) : collect(frame_times)
+    length(times)>=2 && all(isfinite,times) && all(diff(times).>0) ||
+        error("frame_times must be finite and strictly increasing.")
+    ta<=first(times)<last(times)<=tb || error("frame_times must lie inside the window.")
+    nf=length(times); variable_speed=frame_times!==nothing
+    nt = clamp(ceil(Int, (tb-ta)/trace_dt)+1, 1001, 100001)
+    tt = range(ta, tb; length=nt); U = hcat(si.(tt)...)
+    tx = (tt .- ta).*1e3; X1=U[1,:].*1e6; X2=U[3,:].*1e6
+    bend = (U[3,:].-U[1,:]).*1e9
+    # Full mobile beam, clamped root at s=0 and free tip at s=Lf.
+    s = collect(range(0, p.Lf; length=101)); yy = 100 .* s ./ p.Lf
+    phi = [AnalyticalModel.bshape(q, p.ke, p) for q in s]
+    halfwidth = [AnalyticalModel.bwidth(q, p)*1e6/2 for q in s]
+    gp = p.g0-2p.Tp; ybottom = 100*(1-p.Leff/p.Lf)
+    # Fixed facing walls reproduce gp + a*y - r*w over the actual overlap.
+    inner_top = (p.wb/2 + gp)*1e6
+    inner_bottom = (AnalyticalModel.bwidth(p.Lf-p.Leff,p)/2 + gp + p.a*p.Leff)*1e6
+    fixed_center = max(inner_bottom,inner_top) + 9.0
+    shuttle_half = 2fixed_center
+    extent = max(shuttle_half + maximum(abs, X1) + 8, 2fixed_center-inner_top+8)
+    pad(v) = max(0.12*(maximum(v)-minimum(v)), 0.01)
+    xlim = 1.12max(maximum(abs, X1), maximum(abs, X2), p.gc*1e6)
+    blim = (minimum(bend)-pad(bend), maximum(bend)+pad(bend))
+    teal="#187E89"; gray="#C7C9CC"; orange="#D66B22"; red="#C83B43"
+    box(xa,xb,ya,yb) = Shape([xa,xb,xb,xa], [ya,ya,yb,yb])
+    common = (; fontfamily="Computer Modern", titlefontsize=11, guidefontsize=10,
+        tickfontsize=9, legendfontsize=9, background_color=:white, grid=false,
+        linewidth=1.5, dpi=100, margin=4*Plots.mm)
+    @printf("Animating %.6f to %.6f s; %d frames; physical step %.3f to %.3f µs/frame.\n",
+        ta,tb,nf,1e6*minimum(diff(times)),1e6*maximum(diff(times)))
+    mktempdir() do frame_dir
+        anim = Animation(frame_dir)
+        for (k,t) in enumerate(times)
+            z=si(t); x1=z[1]*1e6; x2=z[3]*1e6; tm=(t-ta)*1e3
+            w=(1 .- phi).*x1 .+ phi.*x2
+            onleft=-z[3]>=p.gc; onright=z[3]>=p.gc
+            side=z[3]<0 ? -1 : z[3]>0 ? 1 : (z[4]<0 ? -1 : 1)
+            wall=side<0 ? "LEFT" : "RIGHT"
+            j=isempty(visits) ? nothing : argmin([abs(t-(v.entry+v.exit)/2) for v in visits])
+            visit=j===nothing ? nothing : visits[j]
+            state=onleft ? "LEFT CONTACT" : onright ? "RIGHT CONTACT" :
+                visit!==nothing && visit.entry<=t<=visit.exit ? "BETWEEN REBOUNDS - "*(visit.side<0 ? "LEFT" : "RIGHT") :
+                side*z[4]>0 ? "APPROACH "*wall : "RELEASE / AWAY FROM "*wall
+            hm=p.h_eff+AnalyticalModel.softpos(p.gc+z[3],p.epsg)
+            hp=p.h_eff+AnalyticalModel.softpos(p.gc-z[3],p.epsg)
+            a=plot(; common..., xlims=(-extent,extent), ylims=(-48,135),
+                framestyle=:none, ticks=false, legend=false,
+                title=@sprintf("2D electrode schematic  |  t = %.6f s",t))
+            plot!(a,box(-extent+3,extent-3,118,130); c=gray,lc=:black,label="")
+            annotate!(a,0,124,text("Fixed support",10,:black))
+            for (r,active) in ((-1,onleft),(1,onright))
+                ix=r.*[inner_bottom,inner_top,inner_top]
+                ox=r.*[2fixed_center-inner_bottom,2fixed_center-inner_top,2fixed_center-inner_top]
+                sy=[ybottom,100.,118.]
+                plot!(a,Shape(vcat(ix,reverse(ox)),vcat(sy,reverse(sy)));
+                    c=active ? orange : gray,lc=:black,label="")
+            end
+            plot!(a,box(x1-shuttle_half,x1+shuttle_half,-9,0);c=teal,lc=:black,label="")
+            plot!(a,Shape(vcat(w.-halfwidth,reverse(w.+halfwidth)),vcat(yy,reverse(yy)));
+                c=teal,lc=:black,label="")
+            plot!(a,w,yy;c=:white,ls=:dash,lw=1,label="")
+            scatter!(a,[x1,x2],[0,100];c=red,ms=4,msc=red,label="")
+            annotate!(a,x1,-4.5,text("Shuttle  x1(t)",10,:white))
+            annotate!(a,x2,105,text("x2(t)",10,:black))
+            # Tip-gap brackets; the numerical readout resolves nanometre clearances.
+            for (xa,xb) in ((-inner_top,x2-p.wb*1e6/2),(x2+p.wb*1e6/2,inner_top))
+                plot!(a,[xa,xb],[110,110];c=teal,lw=1.5,label="")
+                plot!(a,[xa,xa,NaN,xb,xb],[108,112,NaN,108,112];c=teal,lw=1,label="")
+            end
+            if onleft || onright
+                r=onright ? 1 : -1
+                scatter!(a,[x2+r*p.wb*1e6/2],[100];c=orange,ms=6,msc=:black,label="")
+            end
+            annotate!(a,0,-16,text(state,10,(onleft||onright) ? orange : teal))
+            annotate!(a,0,-24,text(@sprintf("x1 = %.4f µm    x2 = %.4f µm",x1,x2),9,:black))
+            annotate!(a,0,-31,text(@sprintf("Fluid h₋ = %.1f nm    h₊ = %.1f nm",hm*1e9,hp*1e9),9,:black))
+            annotate!(a,0,-38,text(@sprintf("Nominal overlap |x2| − gc = %.2f nm",(abs(z[3])-p.gc)*1e9),9,:black))
+            annotate!(a,0,-45,text("Horizontal scale retained; vertical dimension compressed",8,:gray35))
+            b=plot(tx,hcat(X1,X2); common...,c=[teal red],label=["Shuttle x1" "Tip x2"],
+                xlims=(0,(tb-ta)*1e3),ylims=(-xlim,xlim),ylabel="Displacement (µm)",
+                xlabel="",title=variable_speed ? "One cycle; playback slower around wall visits" : "Motion and nominal contact limits",
+                legend=:outertop,legend_column=2)
+            for v in visits
+                vspan!(b,([v.lo,v.hi].-ta).*1e3;c=orange,alpha=0.09,label="")
+            end
+            hline!(b,[-p.gc,p.gc].*1e6;c=:gray,ls=:dash,lw=1,label="")
+            vline!(b,[tm];c=:black,lw=1,label="")
+            scatter!(b,[tm,tm],[x1,x2];c=[teal,red],ms=4,msc=:white,label="")
+            c=plot(tx,bend;common...,c=teal,label="",xlims=(0,(tb-ta)*1e3),ylims=blim,
+                xlabel="Time from window start (ms)",ylabel="x2 − x1 (nm)",title="Relative electrode bending",legend=false)
+            vline!(c,[tm];c=:black,lw=1,label="")
+            scatter!(c,[tm],[(z[3]-z[1])*1e9];c=red,ms=4,msc=:white,label="")
+            if visit!==nothing
+                # Wall-relative coordinates resolve nanometre contact on the same
+                # trajectory. This close-up switches between the two wall visits.
+                v=visit; sel=findall(q->v.lo<=q<=v.hi,tt)
+                td=(tt[sel].-v.entry).*1e3
+                d1=(v.side.*U[1,sel].-p.gc).*1e9
+                d2=(v.side.*U[3,sel].-p.gc).*1e9
+                d=plot(td,hcat(d1,d2);common...,c=[teal red],label=["Shuttle" "Tip"],
+                    legend=false,xlims=((v.lo-v.entry)*1e3,(v.hi-v.entry)*1e3),
+                    xlabel="Time from first contact in this visit (ms)",ylabel="r*x - gc (nm)",
+                    title="Visit $j/$(length(visits)): "*(v.side<0 ? "left" : "right")*" approach and release")
+                hline!(d,[0.];c=:gray,ls=:dash,label="")
+                vline!(d,([v.entry,v.exit].-v.entry).*1e3;c=orange,ls=:dot,label="")
+                if v.lo<=t<=v.hi
+                    vline!(d,[(t-v.entry)*1e3];c=:black,label="")
+                    scatter!(d,fill((t-v.entry)*1e3,2),(v.side.*[z[1],z[3]].-p.gc).*1e9;
+                        c=[teal,red],ms=4,msc=:white,label="")
+                end
+                right=plot(b,c,d;layout=(3,1))
+            else
+                right=plot(b,c;layout=(2,1))
+            end
+            fig=plot(a,right;layout=grid(1,2; widths=[0.50,0.50]),
+                size=(1160,isempty(visits) ? 640 : 820),dpi=100,background_color=:white)
+            k==1 && savefig(fig,png)
+            frame(anim,fig)
+            (k==1 || k%60==0 || k==nf) && println("  animation frame ",k,"/",nf)
+        end
+        ext==".gif" ? gif(anim,dst;fps=fps) : mp4(anim,dst;fps=fps)
+    end
+    println("Saved animation: ",dst)
+    return (; path=dst, preview=png, tspan=(ta,tb), frames=nf,
+        simulation_dt=variable_speed ? nothing : (tb-ta)/(nf-1),
+        frame_times=times, simulation_dt_range=extrema(diff(times)))
+end
+
+"""
+    animate_electrode_cycle(sol, p, zscale; frequency, outfile, kwargs...)
+
+Replay the final complete forcing cycle: both wall visits, their approaches,
+and releases. Default cycle boundaries are measured from `sol.t[1]`; set
+`cycle_start` to choose a different start time. This does not assert steady state.
+
+Playback allocates more frames to each visit, from `pre` seconds before first
+contact to `post` seconds after final release. Physical time stays on screen.
+One visit includes all rebounds on that side before the tip crosses the center.
+Every detected contiguous contact episode contributes a frame at its sampled
+maximum overlap. This helps show brief contacts; it is not an exact crossing
+counter. No contact is invented when the solution does not reach a wall.
+"""
+function animate_electrode_cycle(sol,p,zscale; frequency, cycle_start=nothing,
+        seconds=16, fps=30, pre=1e-3, post=2e-3, slowdown=8.0,
+        trace_dt=2e-6, outfile="electrode_one_cycle_two_hits.gif")
+    frequency>0 && seconds>0 && fps>=1 && pre>=0 && post>=0 && slowdown>=1 && trace_dt>0 ||
+        error("Invalid frequency, playback, or sampling settings.")
+    T=1/frequency; t0=first(sol.t); tend=last(sol.t)
+    if cycle_start===nothing
+        n=floor(Int,(tend-t0)/T+1e-10)
+        n>=1 || error("A complete forcing cycle is needed. Use animate_electrode_contact for a short probe.")
+        ta=t0+(n-1)*T; tb=min(tend,t0+n*T)
+    else
+        ta=Float64(cycle_start); tb=ta+T
+    end
+    t0<=ta<tb<=tend || error("Requested cycle must lie inside the solution.")
+    # Accepted solver times retain short events even when the regular trace grid
+    # is coarser. Dense interpolation supplies intermediate visual samples.
+    tt=sort!(unique!(vcat(collect(range(ta,tb;length=max(1001,ceil(Int,T/trace_dt)+1))),
+        [t for t in sol.t if ta<=t<=tb])))
+    x2=[sol(t)[3]*zscale[3] for t in tt]; delta=abs.(x2).-p.gc
+    hit=delta.>=0; visits=NamedTuple[]; peaks=Float64[]
+    # Refine observed brackets in the dense solution; this is for movie timing,
+    # not an independently converged physical event-detection calculation.
+    function crossing(a,b,r)
+        ga=r*sol(a)[3]*zscale[3]-p.gc
+        for _ in 1:35
+            m=(a+b)/2; gm=r*sol(m)[3]*zscale[3]-p.gc
+            if (ga>=0)==(gm>=0); a=m; ga=gm; else; b=m; end
+        end
+        return (a+b)/2
+    end
+    i=1
+    while i<=length(tt)
+        r=x2[i]<0 ? -1 : 1; j=i
+        while j<length(tt) && (x2[j+1]<0 ? -1 : 1)==r; j+=1; end
+        ci=[k for k in i:j if hit[k]]
+        if !isempty(ci)
+            a=first(ci); b=last(ci)
+            entry=a==1 ? ta : crossing(tt[a-1],tt[a],r)
+            leave=b==length(tt) ? tb : crossing(tt[b],tt[b+1],r)
+            push!(visits,(;side=r,entry,exit=leave,lo=max(ta,entry-pre),hi=min(tb,leave+post),
+                complete_entry=a>1,complete_exit=b<length(tt)))
+        end
+        i=j+1
+    end
+    i=1
+    while i<=length(tt)
+        if !hit[i]; i+=1; continue; end
+        j=i
+        while j<length(tt) && hit[j+1]; j+=1; end
+        k=i-1+argmax(@view delta[i:j]); push!(peaks,tt[k]); i=j+1
+    end
+    length(visits)==2 && sort([v.side for v in visits])==[-1,1] ||
+        @warn "This computed cycle does not contain exactly one visit to each wall; showing the actual trajectory." visits=length(visits)
+    any(v->!v.complete_entry || !v.complete_exit,visits) &&
+        @warn "A wall visit crosses the cycle boundary. Set cycle_start to a free-travel instant to see both ends."
+    # Uniform movie frames in weighted time => smaller physical increments near
+    # contacts. Required peak samples are inserted without changing any state.
+    weight(t)=any(v->v.lo<=t<=v.hi,visits) ? slowdown : 1.0
+    clock=vcat(0.,cumsum(diff(tt).*[weight((tt[k]+tt[k+1])/2) for k in 1:length(tt)-1]))
+    nbase=max(2,round(Int,seconds*fps)-length(peaks)); times=Float64[]
+    for q in range(0.,last(clock);length=nbase)
+        k=min(searchsortedlast(clock,q),length(clock)-1)
+        push!(times,tt[k]+(q-clock[k])/(clock[k+1]-clock[k])*(tt[k+1]-tt[k]))
+    end
+    times[1]=ta; times[end]=tb; times=sort!(unique!(vcat(times,peaks)))
+    println("One-cycle wall visits: ",length(visits),"; detected contact episodes shown: ",length(peaks))
+    for (j,v) in enumerate(visits)
+        @printf("  Visit %d (%s): first contact %.9f s, final release %.9f s\n",j,v.side<0 ? "left" : "right",v.entry,v.exit)
+    end
+    movie=animate_electrode_contact(sol,p,zscale;frequency,cycles=1,window=(ta,tb),
+        seconds,fps,outfile,trace_dt,frame_times=times,visits)
+    return (;movie...,visits,contact_peak_times=peaks)
+end
+
+animate_electrode_cycle(sol, p_new, zscale;
+    frequency=f,
+    seconds=16,
+    fps=30,
+    outfile="electrode_one_cycle_two_hits.gif")

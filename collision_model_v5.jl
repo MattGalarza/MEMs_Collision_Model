@@ -189,9 +189,6 @@ function create_params(p::Params{T}; verbose = true) where T<:Real
     p.k1  = p.nsp_par/p.nsp_ser*p.E*p.Tf*p.ws^3/p.Lsp^3
     p.k3  = p.gamma3*p.nsp_par/p.nsp_ser^3*0.72*p.E*p.Tf*p.ws/p.Lsp^3
     p.kss = p.nss*p.E*p.Tf*p.wss^3/(4*p.Lss^3)
-    # Suspension / stopper spring constants scaling
-    p.k1 *= p.ksus_scale
-    p.k3 *= p.ksus_scale
  
     # Consistent mass matrix from the common displacement field w = (1 - phi)*x1 + phi*x2
     mass(i, j) = p.nb*glquad(s -> begin
@@ -577,8 +574,8 @@ import .AnalyticalModel
 # --------------------------------------- External Force ------------------------------------
  
 # Sine Wave External Force
-f = 100.0        # Frequency (Hz)
-alpha = 1.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
+f = 200.0        # Frequency (Hz)
+alpha = 2.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
                 # Quasi-static contact threshold at 3 V is between 2.0 and 2.1
 g = 9.80665     # Gravitational constant (m/s^2)
 A = alpha*g

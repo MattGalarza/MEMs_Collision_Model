@@ -56,8 +56,6 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     nsp_ser::Int = 6     # Suspension: series spans per chain
     nss::Int = 2         # Soft-stopper cantilevers acting in parallel, per side
     gamma3::T = 1.0      # Cubic-stiffness geometry correction (not calibrated)
-    ksus_scale::T = 1.0   # empirical correction to k1, k3
-    kc_scale::T = 1.0     # empirical correction to contact-mode stiffness nb*ke
  
     # Mass and material properties
     m1::T = 2.0933e-6    # Shuttle-only mass. MUST exclude the explicit mobile beams:
@@ -580,7 +578,7 @@ import .AnalyticalModel
  
 # Sine Wave External Force
 f = 100.0        # Frequency (Hz)
-alpha = 2.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
+alpha = 1.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
                 # Quasi-static contact threshold at 3 V is between 2.0 and 2.1
 g = 9.80665     # Gravitational constant (m/s^2)
 A = alpha*g
@@ -1829,3 +1827,11 @@ open("diag_report.txt", "w") do io
     write(io, String(take!(diag_buf)))
 end
 println(">>> diagnostics written to ", abspath("diag_report.txt"))
+
+
+
+
+p_cal = deepcopy(p_new); p_cal.ksus_scale = 0.468; p_cal.kc_scale = 0.157
+AnalyticalModel.create_params(p_cal; verbose = false)
+println("f1 = ", sqrt(p_cal.k1/p_cal.mtot)/(2π), " Hz, contact mode = ",
+        sqrt((p_cal.k1 + p_cal.nb*p_cal.ke*p_cal.kc_scale)/p_cal.M[1,1])/(2π), " Hz")

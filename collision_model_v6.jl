@@ -673,7 +673,7 @@ import .AnalyticalModel
 # --------------------------------------- External Force ------------------------------------
  
 # Sine Wave External Force
-f = 200.0        # Frequency (Hz)
+f = 100.0        # Frequency (Hz)
 alpha = 2.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
                 # Quasi-static contact threshold at 3 V is between 2.0 and 2.1
 g = 9.80665     # Gravitational constant (m/s^2)

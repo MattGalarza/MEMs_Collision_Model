@@ -27,10 +27,7 @@ set_journal_theme()
 # --------------------------------------- Analytical Model ----------------------------------
  
 module AnalyticalModel
-using DifferentialEquations
-using Parameters
-using LinearAlgebra
-using Printf
+using DifferentialEquations, Parameters, LinearAlgebra, Printf
 export Params, p, create_params, spring, collision, damping, electrostatic, CoupledSystem!,
        energy, energy_parts, ledger, report, energy_check, forces, capacitance, classtip, normq
  

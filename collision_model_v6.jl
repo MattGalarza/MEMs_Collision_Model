@@ -693,12 +693,12 @@ Fext_sine = t -> A*ramp(t)*sin(2*pi*f*t)
 # in the window, g) and f (drive frequency) come from the record, so the ramp, the last-two-cycle
 # windows, the animation and the run folder work unchanged. Runtime scales with the window length:
 # the full 9.9 s record of accelT1 is ~1000 drive cycles; (2.0, 3.5) brackets the jump.
-use_experiment   = false
+use_experiment   = true
 exp_dir          = joinpath(@__DIR__, "data")
 exp_accel_file   = joinpath(exp_dir, "accelT1.tmp.txt")
 exp_output_file  = joinpath(exp_dir, "voltageT1.tmp.txt")   # "" or a missing file: model only
 exp_fs_accel     = 100e3          # accel sampling rate when the file stores sample indices [S/s]
-exp_window       = (0.0, Inf)     # part of the record to simulate [s]
+exp_window       = (0.0, 3.0)     # part of the record to simulate [s]
 exp_lowpass      = 2000.0         # zero-phase low-pass on the measured acceleration [Hz]; 0 disables
 exp_accel_scale  = 1.0            # sign / sensitivity correction on the acceleration
 exp_output_scale = 1.0            # readout gain correction on the measured voltage

@@ -27,7 +27,10 @@ set_journal_theme()
 # --------------------------------------- Analytical Model ----------------------------------
  
 module AnalyticalModel
-using DifferentialEquations, Parameters, LinearAlgebra, Printf
+using DifferentialEquations
+using Parameters
+using LinearAlgebra
+using Printf
 export Params, p, create_params, spring, collision, damping, electrostatic, CoupledSystem!,
        energy, energy_parts, ledger, report, energy_check, forces, capacitance, classtip, normq
  
@@ -670,7 +673,7 @@ import .AnalyticalModel
 # --------------------------------------- External Force ------------------------------------
  
 # Sine Wave External Force
-f = 100.0        # Frequency (Hz)
+f = 20.0        # Frequency (Hz)
 alpha = 2.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
                 # Quasi-static contact threshold at 3 V is between 2.0 and 2.1
 g = 9.80665     # Gravitational constant (m/s^2)
@@ -678,13 +681,118 @@ A = alpha*g
 n_ramp = 4      # Ramp-up duration in drive cycles (C1 cosine ramp, zero end slopes)
 ramp(t) = 0.5*(1 - cos(pi*min(t*f/n_ramp, 1.0)))
 Fext_sine = t -> A*ramp(t)*sin(2*pi*f*t)
+
+# ---------------------------------- Experimental Input (optional) ----------------------------------
+# use_experiment = true drives the model with a measured base acceleration instead of the sine, and
+# compares model and measured output when the output file is present. Files are the two-column
+# LabVIEW text exports kept in ./data beside this script:
+#   acceleration: "Samples" or "Time (s)", then "Acceleration (g)"   (sample index -> exp_fs_accel)
+#   output      : "Time (s)", then "Voltage (V)"                     (optional: enables the comparison)
+# Both records are assumed to start at the same instant (exp_align = :none); :xcorr shifts the measured
+# output by the best-matching lag. The lag is printed either way. In experiment mode alpha (peak |a|
+# in the window, g) and f (drive frequency) come from the record, so the ramp, the last-two-cycle
+# windows, the animation and the run folder work unchanged. Runtime scales with the window length:
+# the full 9.9 s record of accelT1 is ~1000 drive cycles; (2.0, 3.5) brackets the jump.
+use_experiment   = false
+exp_dir          = joinpath(@__DIR__, "data")
+exp_accel_file   = joinpath(exp_dir, "accelT1.tmp.txt")
+exp_output_file  = joinpath(exp_dir, "voltageT1.tmp.txt")   # "" or a missing file: model only
+exp_fs_accel     = 100e3          # accel sampling rate when the file stores sample indices [S/s]
+exp_window       = (0.0, Inf)     # part of the record to simulate [s]
+exp_lowpass      = 2000.0         # zero-phase low-pass on the measured acceleration [Hz]; 0 disables
+exp_accel_scale  = 1.0            # sign / sensitivity correction on the acceleration
+exp_output_scale = 1.0            # readout gain correction on the measured voltage
+exp_align        = :none          # :none (common start) or :xcorr (best-matching lag)
+
+# Two-column text export (header line, whitespace separated, CRLF tolerated)
+function read_two_column(path)
+    lines = readlines(path)
+    c1 = Float64[]; c2 = Float64[]
+    sizehint!(c1, length(lines)); sizehint!(c2, length(lines))
+    for ln in @view lines[2:end]
+        sp = split(strip(ln))
+        length(sp) >= 2 || continue
+        push!(c1, parse(Float64, sp[1])); push!(c2, parse(Float64, sp[2]))
+    end
+    return c1, c2, strip(lines[1])
+end
+
+# Linear interpolation on a uniform grid (t0, dt); holds the end values outside the record
+function uniform_interp(y, t0, dt, t)
+    x = (t - t0)/dt
+    x <= 0 && return y[1]
+    i = floor(Int, x) + 1
+    i >= length(y) && return y[end]
+    w = x - (i - 1)
+    return (1 - w)*y[i] + w*y[i + 1]
+end
+
+# Zero-phase 2nd-order Butterworth low-pass (biquad run forward and backward); fc <= 0 disables
+function lowpass_zero_phase(x, fs, fc)
+    (fc <= 0 || fc >= fs/2) && return copy(x)
+    K = tan(pi*fc/fs); nrm = 1/(1 + sqrt(2)*K + K^2)
+    b0 = K^2*nrm; b1 = 2*b0; b2 = b0; a1 = 2*(K^2 - 1)*nrm; a2 = (1 - sqrt(2)*K + K^2)*nrm
+    function onepass(u)
+        y = similar(u); y[1] = u[1]; y[2] = u[2]
+        for n in 3:length(u)
+            y[n] = b0*u[n] + b1*u[n-1] + b2*u[n-2] - a1*y[n-1] - a2*y[n-2]
+        end
+        return y
+    end
+    return reverse(onepass(reverse(onepass(x))))
+end
+
+# Drive frequency from upward zero crossings with hysteresis (robust to noise and amplitude sweeps)
+function drive_frequency(t, a)
+    h = 0.2*maximum(abs, a); armed = false; tc = Float64[]
+    for i in 2:length(a)
+        a[i] < -h && (armed = true)
+        if armed && a[i-1] < 0 && a[i] >= 0
+            push!(tc, t[i-1] + (t[i] - t[i-1])*(-a[i-1])/(a[i] - a[i-1])); armed = false
+        end
+    end
+    length(tc) >= 3 || error("drive_frequency: fewer than three drive cycles in the acceleration window")
+    return 1/sort(diff(tc))[div(length(tc), 2)]
+end
+
+Fext_exp = t -> 0.0
+exp_has_output = false
+if use_experiment
+    c1col, acol, ahdr = read_two_column(exp_accel_file)
+    ta_exp    = occursin("Time", ahdr) ? c1col : c1col ./ exp_fs_accel
+    dta       = ta_exp[2] - ta_exp[1]
+    a_exp_raw = exp_accel_scale .* acol                                   # measured, g
+    a_exp     = lowpass_zero_phase(a_exp_raw, 1/dta, exp_lowpass)         # model input before the ramp, g
+    exp_has_output = !isempty(exp_output_file) && isfile(exp_output_file)
+    if exp_has_output
+        tv_exp, vcol, _ = read_two_column(exp_output_file)
+        v_exp = exp_output_scale .* vcol                                   # measured output, V
+        dtv   = tv_exp[2] - tv_exp[1]
+    end
+    t_rec_end = exp_has_output ? min(ta_exp[end], tv_exp[end]) : ta_exp[end]
+    exp_t0 = max(exp_window[1], ta_exp[1]); exp_t1 = min(exp_window[2], t_rec_end)
+    exp_t1 > exp_t0 || error("exp_window lies outside the record")
+    exp_T  = exp_t1 - exp_t0
+    iw     = findall(t -> exp_t0 <= t <= exp_t1, ta_exp)
+    f_exp  = drive_frequency(ta_exp[iw], a_exp[iw])
+    f      = round(f_exp; digits = 1)                     # used by the ramp, the windows and the animation
+    alpha  = round(maximum(abs, a_exp[iw]); digits = 2)    # peak |a| in the window (g), for the run folder
+    exp_tag = replace(replace(basename(exp_accel_file), r"(\.tmp)?\.(txt|csv)$" => ""), "accel" => "")
+    isempty(exp_tag) && (exp_tag = "data")
+    Fext_exp = let a_in = a_exp, t0a = ta_exp[1], dt_in = dta, toff = exp_t0
+        t -> g*ramp(t)*uniform_interp(a_in, t0a, dt_in, t + toff)
+    end
+    @printf("experimental input: %s (%d samples, %.1f kS/s), window %.3f-%.3f s, drive %.4f Hz, peak %.3f g%s\n",
+            basename(exp_accel_file), length(a_exp), 1e-3/dta, exp_t0, exp_t1, f_exp, alpha,
+            exp_has_output ? string("; output: ", basename(exp_output_file)) : "; no output file (model only)")
+end
  
 # ------------------------------------- Set Input Force ------------------------------------
  
 # Set to `true` to use sine forcing, `false` for a near-contact displaced IC
 # (free evolution: one contact episode probe, no external force)
 use_sine = true
-Fext_input = use_sine ? Fext_sine : (t -> 0.0)
+Fext_input = use_experiment ? Fext_exp : use_sine ? Fext_sine : (t -> 0.0)
  
 # ------------------------------------ Initialize Parameters --------------------------------
  
@@ -706,7 +814,7 @@ run_energy_check = true  # energy accounting at five representative states (abou
 run_energy_check && AnalyticalModel.energy_check(p_new)
  
 # Initial conditions
-if use_sine
+if use_sine || use_experiment
     x10, x10dot, x20, x20dot = 0.0, 0.0, 0.0, 0.0
 else
     # Near-contact probe IC (episode-scale evaluation without forcing): the median tip starts
@@ -728,7 +836,7 @@ z0 = [x10, x10dot, x20, x20dot, 0.0]
 use_ledger && (z0 = vcat(z0, zeros(7)))
 z0 = vcat(z0, repeat([x20, x20dot], p_new.n_cls - 1))   # class tips 2..n_cls, after the work states
 n_cycles = 10
-tspan  = use_sine ? (0.0, n_cycles/f) : (0.0, 600e-6)
+tspan  = use_experiment ? (0.0, exp_T) : use_sine ? (0.0, n_cycles/f) : (0.0, 600e-6)
  
 # State scaling (corrected-model numerics). The finite-difference Jacobian perturbs each
 # state by ~1.5e-8*max(|z|, 1): in SI metres that is 15 nm, far wider than the contact
@@ -741,7 +849,7 @@ use_ledger && (zscale = vcat(zscale, fill(Es, 7)))
 zscale = vcat(zscale, repeat([xs, vs], p_new.n_cls - 1))
 abstol = 1e-10                                 # on the scaled states
 reltol = 1e-7
-dtmax  = use_sine ? 2e-5 : 1e-6                # brackets the ~100 us contact events
+dtmax  = (use_sine || use_experiment) ? 2e-5 : 1e-6                # brackets the ~100 us contact events
  
 # ---------------------------------- Solve Analytical Model ---------------------------------
  
@@ -759,7 +867,7 @@ fdjac = isdefined(@__MODULE__, :AutoFiniteDiff) ? AutoFiniteDiff() : false
 sol = solve(eqn, Rodas5P(autodiff = fdjac); abstol = abstol, reltol = reltol, dtmax = dtmax,
             maxiters = Int(1e7))
  
-println(">>> collision_model version v5.4 (orientation + offset classes + run folder; orient = ", p_new.orient,
+println(">>> collision_model version v5.5 (orientation + offset classes + run folder; orient = ", p_new.orient,
         ", n_cls = ", p_new.n_cls, ", sig_off = ", p_new.sig_off, ", vent_faces = ",
         p_new.vent_faces, ", c1 = ", p_new.c1, ", ce = ", p_new.ce, ") <<<")
 println("Type of sol.u: ", typeof(sol.u))
@@ -791,7 +899,7 @@ use_ledger || println("Run-level energy check skipped: set use_ledger = true to 
 # Every figure (PDF), the output data (XLSX) and the animation are written to RUN_Xg_YV_ZHz beside
 # this file (X = alpha, Y = Vbias, Z = f; whole numbers print without decimals, e.g. RUN_2g_3V_200Hz).
 numtag(x) = (r = round(Float64(x); digits = 4); isinteger(r) ? string(Int(r)) : string(r))
-run_dir = joinpath(@__DIR__, string("RUN_", numtag(alpha), "g_", numtag(p_new.Vbias), "V_", numtag(f), "Hz"))
+run_dir = joinpath(@__DIR__, string(use_experiment ? string("RUN_EXP_", exp_tag, "_") : "RUN_", numtag(alpha), "g_", numtag(p_new.Vbias), "V_", numtag(f), "Hz"))
 mkpath(run_dir)
 println("Saving figures, data and animation to: ", run_dir)
 
@@ -851,7 +959,7 @@ function sample_window(sol, p, t0, t1; dt = 2e-6, Fext = Fext_input)
 end
  
 # Uniform 10 us overview grid for the state and force plots
-Wover = sample_window(sol, p_new, sol.t[1], sol.t[end]; dt = 1e-5)
+Wover = sample_window(sol, p_new, sol.t[1], sol.t[end]; dt = max(1e-5, (sol.t[end] - sol.t[1])/2e5))   # <= 2e5 samples
 to = Wover.t
  
 p3  = plot(to, Wover.x1,    xlabel = "Time (s)", ylabel = "x1 (m)",     title = "Shuttle Mass Displacement (x1)", label = "");    showsave(p3, "01_x1_displacement")
@@ -1198,6 +1306,90 @@ end
 
 
 
+# ============================ (5) MODEL VS EXPERIMENT (measured input) ============================
+# Runs with use_experiment = true and a measured output file. Long records are drawn as min/max
+# envelopes so impact spikes stay visible; the last two drive cycles are shown at full resolution,
+# and the output peak-to-peak of every drive cycle is plotted against the drive amplitude in it.
+function envelope(t, y, nb)
+    n = length(t); nb = min(nb, n)
+    edges = round.(Int, range(1, n + 1; length = nb + 1))
+    tc = zeros(nb); lo = zeros(nb); hi = zeros(nb)
+    for k in 1:nb
+        r = edges[k]:(edges[k+1] - 1)
+        tc[k] = t[r[1]]; lo[k] = minimum(@view y[r]); hi[k] = maximum(@view y[r])
+    end
+    return tc, lo, hi
+end
+
+function compare_experiment(W, gacc, t0, fdrive, nramp, a_raw, ta0, dta, v_meas, tv0, dtv, align, title)
+    tm   = W.t; td = tm .+ t0; dtg = tm[2] - tm[1]
+    a_in = W.ae ./ gacc                                  # model input (g): filtered, ramped
+    a_ms = [uniform_interp(a_raw, ta0, dta, t) for t in td]
+    vmod = W.V .* 1e3                                    # mV
+    vat(lag) = [uniform_interp(v_meas, tv0, dtv, t + lag)*1e3 for t in td]
+    post = tm .>= nramp/fdrive                           # after the input ramp
+    vm0  = vmod[post] .- sum(vmod[post])/count(post)
+    nl   = ceil(Int, 1/(fdrive*dtg)); cbest = -Inf; lbest = 0.0
+    for k in -nl:nl                                      # lags within one drive period
+        ve = vat(k*dtg)[post]; ve .-= sum(ve)/length(ve)
+        c  = sum(vm0 .* ve)/sqrt(sum(abs2, vm0)*sum(abs2, ve) + 1e-300)
+        if c > cbest
+            cbest = c; lbest = k*dtg
+        end
+    end
+    vexp = vat(align == :xcorr ? lbest : 0.0)
+    il = findall(>=(tm[end] - min(0.1, 0.25*(tm[end] - tm[1]))), tm)
+    ws(x) = (maximum(x), minimum(x), maximum(x) - minimum(x), sqrt(sum(abs2, x .- sum(x)/length(x))/length(x)))
+    sm = ws(vmod[il]); se = ws(vexp[il])
+    @printf("\nmodel vs experiment over the last %.3f s (model | measured): peak %.2f | %.2f mV, dip %.2f | %.2f mV, p-p %.2f | %.2f mV, rms %.2f | %.2f mV\n",
+            tm[end] - tm[il[1]], sm[1], se[1], sm[2], se[2], sm[3], se[3], sm[4], se[4])
+    @printf("best-matching lag of the measured output: %+.3f ms (correlation %.3f), %s\n", lbest*1e3, cbest,
+            align == :xcorr ? "applied" : "not applied (exp_align = :none, common start assumed)")
+    # output peak-to-peak of every drive cycle against the drive amplitude in that cycle
+    ci = floor.(Int, tm .* fdrive) .+ 1; nc = maximum(ci)
+    lom = fill(Inf, nc); him = fill(-Inf, nc); loe = fill(Inf, nc); hie = fill(-Inf, nc); am = zeros(nc)
+    for i in eachindex(tm)
+        c = ci[i]
+        lom[c] = min(lom[c], vmod[i]); him[c] = max(him[c], vmod[i])
+        loe[c] = min(loe[c], vexp[i]); hie[c] = max(hie[c], vexp[i])
+        am[c]  = max(am[c], abs(a_in[i]))
+    end
+    cy = 1:max(nc - 1, 1)                                # drop the partial last cycle
+    ok = "#000000"; om = "#D55E00"; oa = "#0072B2"; og = "#999999"
+    te, alo, ahi = envelope(td, a_ms, 4000); _, ilo, ihi = envelope(td, a_in, 4000)
+    _, elo, ehi = envelope(td, vexp, 4000);  _, mlo, mhi = envelope(td, vmod, 4000)
+    pa = plot(te, alo; fillrange = ahi, c = og, fillcolor = og, fillalpha = 0.6, lw = 0, label = "measured (raw)",
+              ylabel = "a (g)", title = "Base acceleration")
+    plot!(pa, te, ilo; fillrange = ihi, c = oa, fillcolor = oa, fillalpha = 0.4, lw = 0, label = "model input (filtered)")
+    pb = plot(te, elo; fillrange = ehi, c = ok, fillcolor = ok, fillalpha = 0.45, lw = 0, label = "measured",
+              ylabel = "Vout (mV)", title = "Output voltage")
+    plot!(pb, te, mlo; fillrange = mhi, c = om, fillcolor = om, fillalpha = 0.45, lw = 0, label = "model")
+    iz = findall(>=(tm[end] - 2/fdrive), tm)
+    pc = plot(td[iz] .* 1e3, vexp[iz]; c = ok, label = "measured", xlabel = "record time (ms)", ylabel = "Vout (mV)",
+              title = "Last two drive cycles")
+    plot!(pc, td[iz] .* 1e3, vmod[iz]; c = om, label = "model")
+    pd = scatter(am[cy], (hie .- loe)[cy]; c = ok, ms = 2.5, msw = 0, label = "measured",
+                 xlabel = "drive amplitude in the cycle (g)", ylabel = "output p-p (mV)", title = "Output per drive cycle")
+    scatter!(pd, am[cy], (him .- lom)[cy]; c = om, ms = 2.5, msw = 0, label = "model")
+    fx = plot(pa, pb, pc, pd; layout = (4, 1), size = (1000, 1500), plot_title = title,
+              left_margin = 5*Plots.mm, titlefontsize = 10)
+    cols  = Any[tm, td, a_ms, a_in, vmod, vexp]
+    names = ["t model (s)", "t record (s)", "a measured (g)", "a model input (g)", "Vout model (mV)", "Vout measured (mV)"]
+    return fx, cols, names
+end
+
+exp_cols = Any[]; exp_names = String[]
+if use_experiment && exp_has_output
+    fx, exp_cols, exp_names = compare_experiment(Wover, g, exp_t0, f_exp, n_ramp, a_exp_raw, ta_exp[1], dta,
+                                                 v_exp, tv_exp[1], dtv, exp_align,
+                                                 string("Model vs experiment: ", basename(exp_accel_file),
+                                                        ", Vbias = ", p_new.Vbias, " V"))
+    showsave(fx, "50_model_vs_experiment")
+elseif use_experiment
+    exp_cols  = Any[Wover.t, Wover.t .+ exp_t0, Wover.ae ./ g]
+    exp_names = ["t model (s)", "t record (s)", "a model input (g)"]
+end
+
 # ------------------------------------- Output Data (XLSX) -------------------------------------
 # Model states and forces on the uniform 10 us overview grid (Wover), one sheet each, plus the
 # stored energies / powers and the run settings. Units are in the column headers.
@@ -1230,7 +1422,8 @@ info = [("alpha (g)", alpha), ("f (Hz)", f), ("Vbias (V)", p_new.Vbias), ("Rload
         ("orient", p_new.orient), ("n_cls", p_new.n_cls), ("mu_off (m)", p_new.mu_off),
         ("sig_off (m)", p_new.sig_off), ("k1 (N/m)", p_new.k1), ("ke (N/m)", p_new.ke), ("c1 (N s/m)", p_new.c1),
         ("ce (N s/m)", p_new.ce), ("vent_faces", p_new.vent_faces), ("n_cycles", n_cycles),
-        ("use_sine", use_sine), ("solver retcode", sol.retcode), ("energy residual / throughput", led_rel)]
+        ("use_sine", use_sine), ("input", use_experiment ? basename(exp_accel_file) : use_sine ? "sine" : "free probe"),
+        ("solver retcode", sol.retcode), ("energy residual / throughput", led_rel)]
 info_cols = Any[[first(x) for x in info], [string(last(x)) for x in info]]
 xlsx_path = joinpath(run_dir, "output_data.xlsx")
 XLSX.openxlsx(xlsx_path, mode = "w") do xf
@@ -1240,6 +1433,7 @@ XLSX.openxlsx(xlsx_path, mode = "w") do xf
     XLSX.writetable!(XLSX.addsheet!(xf, "Forces"), force_cols, force_names)
     XLSX.writetable!(XLSX.addsheet!(xf, "Energy"), energy_cols, energy_names)
     XLSX.writetable!(XLSX.addsheet!(xf, "Run info"), info_cols, ["setting", "value"])
+    isempty(exp_cols) || XLSX.writetable!(XLSX.addsheet!(xf, "Experiment"), exp_cols, exp_names)
 end
 println("Saved output data: ", xlsx_path)
 

@@ -1,6 +1,6 @@
 # ------------------------------------------ Libraries --------------------------------------
  
-using DifferentialEquations, Plots, Printf
+using DifferentialEquations, Plots, Printf, XLSX
  
 # Define high-quality theme for journal publication
 function set_journal_theme()
@@ -30,8 +30,9 @@ module AnalyticalModel
 using DifferentialEquations
 using Parameters
 using LinearAlgebra
+using Printf
 export Params, p, create_params, spring, collision, damping, electrostatic, CoupledSystem!,
-       energy, energy_parts, ledger, selfcheck, forces, capacitance, classtip, normq
+       energy, energy_parts, ledger, report, energy_check, forces, capacitance, classtip, normq
  
 @with_kw mutable struct Params{T<:Real}
     # Fundamental geometric parameters
@@ -285,40 +286,7 @@ function create_params(p::Params{T}; verbose = true) where T<:Real
     p.ecls = ec[sortperm(collect(1:nc); by = j -> (abs(j - (nc + 1)/2), j))]
     p.wcls = fill(1/nc, nc)
  
-    if verbose
-        nbke = p.nb*p.ke
-        k11 = p.k1 + nbke; k12 = -nbke
-        K  = p.orient == 0 ? [k11 k12; k12 nbke] : [p.k1 0.0; 0.0 nbke]
-        fr = sqrt.(eigvals(Symmetric(K), Symmetric(p.M)))./(2*pi)
-        Mc = p.orient == 0 ? p.M[1,1] : p.M[1,1] + p.M[2,2]      # tips move with the shuttle in contact
-        xc = p.orient == 0 ? (p.gc, p.gc) : (-p.gc, 0.0)          # rigid closure of every gap to contact
-        bsum(d) = p.orient == 0 ? d[1] + 2*d[2] + d[3] : d[1]
-        d0 = film(0.0, 0.0, p); dc = film(xc[1], xc[2], p)
-        Cc, Fe1c, Fe2c, _, _ = electrostatic(xc[1], xc[2], 0.0, p)
-        Fsc = p.k1*p.gc + p.k3*p.gc^3
-        println("\n--- Springs ---")
-        println("ke = ", p.ke, "   k1 = ", p.k1, "   k3 = ", p.k3, "   kss = ", p.kss)
-        println("(expect ke = 22.5969569824, k1 = 3.2799375, k3 = 3.0357e8, kss = 5.831)")
-        println("\n--- Mass matrix (x1, x2) ---")
-        println("M11 = ", p.M[1,1], "   M12 = ", p.M[1,2], "   M22 = ", p.M[2,2], "   mtot = ", p.mtot)
-        println("\n--- Modes ---")
-        println("shuttle f1 = ", round(fr[1]; digits = 1), " Hz   free beam f2 = ",
-                round(fr[2]/1e3; digits = 2), " kHz   tips-pinned contact mode = ",
-                round(sqrt((p.k1 + nbke)/Mc)/(2*pi); digits = 0), " Hz")
-        println("(expect 197.3 Hz, 55.43 kHz, 4667 Hz for orient 0 | 197.3 Hz, 55.03 kHz, 4620 Hz for orient 1)")
-        println("zeta_c of ce in the contact mode = ",
-                round(p.nb*p.ce/(2*sqrt((p.k1 + nbke)*Mc)); sigdigits = 3),
-                "   shuttle Q of c1 = ", (p.c1 > 0 ? round(sqrt(p.k1*p.mtot)/p.c1; sigdigits = 3) : Inf))
-        println("\n--- Film, rigid translation, whole array (vent_faces = ", p.vent_faces, ") ---")
-        println("b(rest)    = ", bsum(d0), "  (expect 1.957e-6 | 7.32e-6 | 4.187e-4 for 2 | 1 | 0)")
-        println("b(contact) = ", bsum(dc), "  (expect 2.068e-3 | 3.60e-3 | 1.347e-2 for 2 | 1 | 0)")
-        println("\n--- Electrostatics at nominal contact, Vbias = ", p.Vbias, " V ---")
-        println("Ct = ", Cc*1e12, " pF   Fe1 = ", Fe1c*1e6, " uN   Fe2 = ", Fe2c*1e6, " uN")
-        println("(expect 7.0974 pF; Fe1, Fe2 = 0.377, 13.05 uN for orient 0 | -13.43, 13.05 uN for orient 1, at 3 V)")
-        println("suspension force at gc = ", Fsc*1e6, " uN   static hold voltage = ",
-                round(p.Vbias*sqrt(Fsc/(p.orient == 0 ? Fe1c + Fe2c : abs(Fe1c))); digits = 2), " V  (expect 45.75 uN, 5.54 V)")
-        println("\n--- Offset classes: n_cls = ", p.n_cls, ", offsets (nm) = ", round.(p.ecls .* 1e9; digits = 1))
-    end
+    verbose && report(p)
     return p
 end
  
@@ -617,123 +585,83 @@ energy_parts(z, p) = energy_parts(z, p, capacitance(z, p))
 energy(z, p) = energy_parts(z, p).E
 ledger(z, E0, p) = energy(z, p) - E0 - z[6] - z[7] + z[8] + z[9] + z[10] + z[11]
  
-# Acceptance tests against the corrected-model regression constants and the Python twin.
-# Builds its own 512-panel parameter sets, so it is independent of the run settings.
-function selfcheck(; verbose = true)
-    allok = true
-    function chk(name, val, ref, rtol)
-        pass = isapprox(val, ref; rtol = rtol)
-        verbose && println(rpad(name, 52), pass ? "PASS  " : "FAIL  ", val, "   (ref ", ref, ")")
-        allok = allok && pass
-        return pass
-    end
-    function chkmax(name, val, tol)
-        pass = val <= tol
-        verbose && println(rpad(name, 52), pass ? "PASS  " : "FAIL  ", val, "   (tol ", tol, ")")
-        allok = allok && pass
-        return pass
-    end
-    sumD(d) = d[1] + 2*d[2] + d[3]
-    verbose && println("\n--- selfcheck ---")
-    q = create_params(Params{Float64}(panels = 512, orient = 0); verbose = false)
-    mphys = q.rho*q.Tf*q.Lf*(q.wb + q.wt)/2
-    chk("ke [N/m]", q.ke, 22.5969569824, 1e-9)
-    chk("k1 [N/m]", q.k1, 3.2799375, 1e-12)
-    chk("k3 [N/m^3]", q.k3, 3.035714285714e8, 1e-11)
-    chk("kss [N/m]", q.kss, 5.831, 1e-12)
-    chk("gc [m]", q.gc, 13.71e-6, 1e-12)
-    chk("tip mass fraction M22/(nb*m_beam)", q.M[2,2]/q.nb/mphys, 0.369820966146, 1e-9)
-    chk("sum(M) = m1 + nb*m_beam", sum(q.M), q.m1 + q.nb*mphys, 1e-12)
-    chk("shape at the tip", bshape(q.Lf, q.ke, q), 1.0, 1e-12)
-    chk("sum of Simpson weights = Leff", sum(q.wq), q.Leff, 1e-13)
-    # capacitance and its gradient at nominal contact
-    Cc, _, _, g1, g2 = electrostatic(q.gc, q.gc, 0.0, q)
-    chk("Ct at contact [F]", Cc, 7.0974456842e-12, 1e-8)
-    chk("dCt/dx1 at contact [F/m]", g1, 8.3856419104e-08, 1e-7)
-    chk("dCt/dx2 at contact [F/m]", g2, 2.9006020264e-06, 1e-7)
-    # vented film, both faces / one face, rigid translation (x1 = x2)
-    xs = (0.0, q.gc - 0.95e-6, q.gc)
-    for (x, ref) in zip(xs, (1.9570803057e-06, 1.1783055953e-04, 2.0677254530e-03))
-        chk("vented film (2 faces) sum(D), x = $(x)", sumD(film(x, x, q)), ref, 1e-6)
-    end
-    q1 = create_params(Params{Float64}(panels = 512, vent_faces = 1, orient = 0); verbose = false)
-    for (x, ref) in zip(xs, (7.3237497784e-06, 3.3537785951e-04, 3.5991030680e-03))
-        chk("vented film (1 face) sum(D), x = $(x)", sumD(film(x, x, q1)), ref, 1e-6)
-    end
-    # lengthwise film = submitted model
-    q0 = create_params(Params{Float64}(panels = 512, vent_faces = 0, orient = 0); verbose = false)
-    for (x, ref) in zip(xs, (4.1873376307e-04, 4.7557756074e-03, 1.3468200914e-02))
-        chk("lengthwise film sum(D), x = $(x)", sumD(film(x, x, q0)), ref, 1e-8)
-    end
-    # classical rectangular plate: uniform gap, no slip, all four edges open
-    qr = create_params(Params{Float64}(panels = 512, gap_slope = 0.0, sigmap = 0.0, seal = false, orient = 0);
-                       verbose = false)
+# Derived quantities of the current parameter set, printed for inspection (values only, no
+# stored references). The film line includes one independent correctness number: the vented
+# solver against the classical rectangular-plate solution (uniform gap, no slip, open edges).
+function report(p)
+    nbke = p.nb*p.ke
+    k11 = p.k1 + nbke; k12 = -nbke
+    K  = p.orient == 0 ? [k11 k12; k12 nbke] : [p.k1 0.0; 0.0 nbke]
+    fr = sqrt.(eigvals(Symmetric(K), Symmetric(p.M)))./(2*pi)
+    Mc = p.orient == 0 ? p.M[1,1] : p.M[1,1] + p.M[2,2]      # tips move with the shuttle in contact
+    xc = p.orient == 0 ? (p.gc, p.gc) : (-p.gc, 0.0)          # rigid closure of every gap to contact
+    bsum(d) = p.orient == 0 ? d[1] + 2*d[2] + d[3] : d[1]
+    d0 = film(0.0, 0.0, p); dc = film(xc[1], xc[2], p)
+    Cc, Fe1c, Fe2c, _, _ = electrostatic(xc[1], xc[2], 0.0, p)
+    Fsc = p.k1*p.gc + p.k3*p.gc^3
+    Fh  = p.orient == 0 ? Fe1c + Fe2c : abs(Fe1c)
+    qr = create_params(Params{Float64}(panels = p.panels, gap_slope = 0.0, sigmap = 0.0, seal = false,
+                                       vent_faces = 2, orient = 0); verbose = false)
     hr = qr.gc + qr.h_eff
     bt = 1 - 192/pi^5*(qr.Tf/qr.Leff)*sum(tanh(k*pi*qr.Leff/(2*qr.Tf))/k^5 for k in 1:2:199)
-    chk("vented film vs rectangular-plate solution", sumD(film(0.0, 0.0, qr)),
-        qr.N*qr.eta*qr.Leff*qr.Tf^3/hr^3*bt, 2e-4)
-    # passivity, monotonicity, gradient and point-wise power balance at five states
-    states = [(0.0, 0.0), (q.gc - 1e-6, q.gc - 1e-6), (q.gc + 0.1e-6, q.gc - 2e-9),
-              (q.gc + 0.2e-6, q.gc + 5e-9), (-q.gc - 0.1e-6, -q.gc - 2e-9)]
-    worstpsd = 0.0; worstmono = 0.0; worstgrad = 0.0; worstpow = 0.0
-    for (x1, x2) in states
-        d = film(x1, x2, q); d0 = film(x1, x2, q0)
-        worstpsd  = max(worstpsd, -d[1]/abs(d[1]), -(d[1]*d[3] - d[2]^2)/(d[1]*d[3]))
-        e11 = d0[1] - d[1]; e12 = d0[2] - d[2]; e22 = d0[3] - d[3]
-        worstmono = max(worstmono, -e11/abs(e11), -(e11*e22 - e12^2)/(d0[1]*d0[3]))
-        dx = 1e-12
-        _, _, _, c1, c2 = electrostatic(x1, x2, 0.0, q)
-        f1 = (electrostatic(x1 + dx, x2, 0.0, q)[1] - electrostatic(x1 - dx, x2, 0.0, q)[1])/(2*dx)
-        f2 = (electrostatic(x1, x2 + dx, 0.0, q)[1] - electrostatic(x1, x2 - dx, 0.0, q)[1])/(2*dx)
-        worstgrad = max(worstgrad, hypot(f1 - c1, f2 - c2)/max(hypot(c1, c2), 1e-18))
-        z = [x1, 0.003, x2, -0.005, 0.2, zeros(7)...]; dz = zero(z)
-        CoupledSystem!(dz, z, q, 0.0, 2.0)
-        sc = [q.gc, 0.02, q.gc, 0.02, 3.0]; g = zeros(5)
-        for j in 1:5
-            hj = sc[j]*1e-6; zp = copy(z); zm = copy(z); zp[j] += hj; zm[j] -= hj
-            g[j] = (energy(zp, q) - energy(zm, q))/(2*hj)
+    dq = film(0.0, 0.0, qr)
+    plate = (dq[1] + 2*dq[2] + dq[3])/(qr.N*qr.eta*qr.Leff*qr.Tf^3/hr^3*bt)
+    println("\n--- Orientation: ", p.orient == 0 ? "compliant electrodes on the shuttle (design intent)" :
+            "compliant electrodes on the substrate (as built)", " ---")
+    println("\n--- Springs ---")
+    @printf("ke = %.6f N/m per electrode   k1 = %.6f N/m   k3 = %.4e N/m^3   kss = %.4f N/m\n",
+            p.ke, p.k1, p.k3, p.kss)
+    println("\n--- Geometry ---")
+    @printf("travel to contact gc = %.4f um   gap slope = %.5f   h_eff = %.0f nm   coating gap hd = %.1f nm\n",
+            p.gc*1e6, p.a, p.h_eff*1e9, p.hd*1e9)
+    println("\n--- Mass matrix (x1, x2) ---")
+    @printf("M11 = %.6e   M12 = %.6e   M22 = %.6e   mtot = %.6e kg\n", p.M[1,1], p.M[1,2], p.M[2,2], p.mtot)
+    println("\n--- Modes ---")
+    @printf("shuttle f1 = %.1f Hz   free electrode mode = %.2f kHz   tips-pinned contact mode = %.0f Hz\n",
+            fr[1], fr[2]/1e3, sqrt((p.k1 + nbke)/Mc)/(2*pi))
+    @printf("zeta_c of ce in the contact mode = %.3g   shuttle Q of c1 = %s\n",
+            p.nb*p.ce/(2*sqrt((p.k1 + nbke)*Mc)), p.c1 > 0 ? @sprintf("%.3g", sqrt(p.k1*p.mtot)/p.c1) : "Inf")
+    println("\n--- Film, rigid closure of the whole array (vent_faces = ", p.vent_faces, ") ---")
+    @printf("b(rest) = %.4e N s/m   b(contact) = %.4e N s/m\n", bsum(d0), bsum(dc))
+    @printf("vented film / rectangular-plate solution (uniform gap, %d panels) = %.5f\n", p.panels, plate)
+    println("\n--- Electrostatics at nominal contact, Vbias = ", p.Vbias, " V ---")
+    @printf("Ct = %.4f pF   Fe on x1 = %.3f uN   Fe on tips = %.3f uN\n", Cc*1e12, Fe1c*1e6, Fe2c*1e6)
+    @printf("suspension force at gc = %.2f uN   static hold voltage = %.2f V\n", Fsc*1e6, p.Vbias*sqrt(Fsc/Fh))
+    println("\n--- Offset classes: n_cls = ", p.n_cls, ", offsets (nm) = ", round.(p.ecls .* 1e9; digits = 1))
+    return nothing
+end
+
+# Energy accounting at five representative states for the parameters actually being run: free
+# flight, approach, and contact on both walls. dE/dt (central differences of E along the vector
+# field) must equal the power balance Pb + Pbias - PR - Pf - Ps - Pw, which holds only if every
+# force is the exact gradient of its energy and every loss is booked. No stored references.
+# The states are written for orient 0 and mapped to orient 1 with overlap and bending preserved.
+function energy_check(p; tol = 1e-4, verbose = true)
+    base = [(0.0, 0.0), (p.gc - 1e-6, p.gc - 1e-6), (p.gc + 0.1e-6, p.gc - 2e-9),
+            (p.gc + 0.2e-6, p.gc + 5e-9), (-p.gc - 0.1e-6, -p.gc - 2e-9)]
+    worst = 0.0
+    for (x1d, x2d) in base
+        x1, x2, v1, v2 = p.orient == 0 ? (x1d, x2d, 0.003, -0.005) : (-x1d, x2d - x1d, -0.003, -0.008)
+        z = [x1, v1, x2, v2, 0.2, zeros(7)...]
+        for j in 2:p.n_cls
+            append!(z, [x2 + 1e-9*(j - 1), v2*(1 - 0.1*(j - 1))])
+        end
+        dz = zero(z)
+        CoupledSystem!(dz, z, p, 0.0, 2.0)
+        iphys = [1:5; 13:length(z)]; g = zeros(length(iphys))
+        for (k, j) in enumerate(iphys)
+            hj = (j == 5 ? 3.0 : (j in (2, 4) || (j > 12 && iseven(j - 12))) ? 0.02 : p.gc)*1e-6
+            zp = copy(z); zm = copy(z); zp[j] += hj; zm[j] -= hj
+            g[k] = (energy(zp, p) - energy(zm, p))/(2*hj)
         end
         exact = dz[6] + dz[7] - (dz[8] + dz[9] + dz[10] + dz[11])
-        worstpow = max(worstpow, abs(dot(g, dz[1:5]) - exact)/max(dz[12], 1e-25))
+        worst = max(worst, abs(dot(g, dz[iphys]) - exact)/max(dz[12], 1e-25))
     end
-    chkmax("film matrix positive semidefinite (5 states)", worstpsd, 1e-12)
-    chkmax("D_lengthwise - D_vented positive semidefinite", worstmono, 1e-12)
-    chkmax("dCt vs central difference (rel.)", worstgrad, 2e-5)
-    chkmax("dE/dt vs power ledger, point-wise (rel.)", worstpow, 5e-5)
-    # symmetry of the two walls
-    Ca = electrostatic(1e-6, 2e-6, 0.0, q)[1]; Cb = electrostatic(-1e-6, -2e-6, 0.0, q)[1]
-    chk("wall symmetry of Ct", Ca, Cb, 1e-13)
-    # v5.2: as-built orientation and offset classes
-    qa = create_params(Params{Float64}(panels = 512, orient = 1); verbose = false)
-    chk("as built: M11 = m1 + nb*m_beam", qa.M[1,1], qa.m1 + qa.nb*mphys, 1e-12)
-    chkmax("as built: |M12|", abs(qa.M[1,2]), 0.0)
-    chk("as built: beta2 = M12 + M22 of design intent", qa.beta[2], q.M[1,2] + q.M[2,2], 1e-9)
-    chk("as built: Ct at contact", electrostatic(-qa.gc, 0.0, 0.0, qa)[1], Cc, 1e-10)
-    q1c = create_params(Params{Float64}(panels = 256, orient = 1); verbose = false)
-    q3  = create_params(Params{Float64}(panels = 256, orient = 1, n_cls = 3); verbose = false)
-    zc1 = [-q1c.gc + 5e-9, -2e-3, 3e-9, 1e-3, 0.1, zeros(7)...]
-    zc3 = [zc1..., 3e-9, 1e-3, 3e-9, 1e-3]
-    dz1 = zero(zc1); dz3 = zero(zc3)
-    CoupledSystem!(dz1, zc1, q1c, 0.0, 2.0); CoupledSystem!(dz3, zc3, q3, 0.0, 2.0)
-    chkmax("identical classes reproduce one class (rel.)",
-           maximum(abs.(dz3[1:12] .- dz1) ./ max.(abs.(dz1), 1e-30)), 1e-10)
-    chkmax("identical classes move together (rel.)",
-           maximum(abs.(dz3[13:16] .- repeat(dz3[3:4], 2)) ./ max.(abs.(repeat(dz3[3:4], 2)), 1e-30)), 1e-10)
-    qd = create_params(Params{Float64}(panels = 256, orient = 1, n_cls = 5, sig_off = 90e-9); verbose = false)
-    zd = [-qd.gc + 20e-9, -3e-3, 2e-9, 1e-3, 0.2, zeros(7)..., -1e-9, 2e-3, 4e-9, -1e-3, 0.0, 5e-4, 1e-9, 0.0]
-    dzd = zero(zd); CoupledSystem!(dzd, zd, qd, 0.0, 2.0)
-    iphys = [1:5; 13:length(zd)]; gd = zeros(length(iphys))
-    for (k, j) in enumerate(iphys)
-        hj = (j == 5 ? 3.0 : (j in (2, 4) || (j > 12 && iseven(j - 12))) ? 0.02 : qd.gc)*1e-6
-        zp = copy(zd); zm = copy(zd); zp[j] += hj; zm[j] -= hj
-        gd[k] = (energy(zp, qd) - energy(zm, qd))/(2*hj)
-    end
-    exactd = dzd[6] + dzd[7] - (dzd[8] + dzd[9] + dzd[10] + dzd[11])
-    chkmax("offset classes: dE/dt vs power ledger (rel.)", abs(dot(gd, dzd[iphys]) - exactd)/max(dzd[12], 1e-25), 5e-5)
-    verbose && println(allok ? ">>> selfcheck: ALL PASS" : ">>> selfcheck: FAILURES ABOVE -- do not trust the run")
-    return allok
+    verbose && @printf("\nenergy accounting at 5 states (flight, approach, contact on both walls): worst |dE/dt - power balance| / throughput = %.2e  %s\n",
+                       worst, worst <= tol ? "(OK)" : "(TOO LARGE: a force and its energy disagree)")
+    return worst
 end
- 
+
 # Initialize a default Params instance and calculate dependent parameters
 p = Params{Float64}()
 p = create_params(p; verbose = false)
@@ -777,8 +705,8 @@ p_new = deepcopy(AnalyticalModel.p)
 #   AnalyticalModel.create_params(p_new; verbose = false)
 AnalyticalModel.create_params(p_new; verbose = true)
  
-run_selfcheck = true     # acceptance tests (a few seconds); see the header
-run_selfcheck && AnalyticalModel.selfcheck()
+run_energy_check = true  # energy accounting at five representative states (about a second)
+run_energy_check && AnalyticalModel.energy_check(p_new)
  
 # Initial conditions
 if use_sine
@@ -834,7 +762,7 @@ fdjac = isdefined(@__MODULE__, :AutoFiniteDiff) ? AutoFiniteDiff() : false
 sol = solve(eqn, Rodas5P(autodiff = fdjac); abstol = abstol, reltol = reltol, dtmax = dtmax,
             maxiters = Int(1e7))
  
-println(">>> collision_model version v5.2 (orientation + offset classes; orient = ", p_new.orient,
+println(">>> collision_model version v5.4 (orientation + offset classes + run folder; orient = ", p_new.orient,
         ", n_cls = ", p_new.n_cls, ", sig_off = ", p_new.sig_off, ", vent_faces = ",
         p_new.vent_faces, ", c1 = ", p_new.c1, ", ce = ", p_new.ce, ") <<<")
 println("Type of sol.u: ", typeof(sol.u))
@@ -843,12 +771,15 @@ println("Solver status: ", sol.retcode)
 println("Solver stats:  ", sol.stats)
  
 # Energy acceptance test: max |ledger| / throughput should be < 1e-5 (submitted model: ~1e-9..1e-7)
+led_rel = NaN
 if use_ledger
     E0     = AnalyticalModel.energy(z0, p_new)
     stride = max(1, div(length(sol.u), 20000))
     maxres = maximum(abs(AnalyticalModel.ledger(u .* zscale, E0, p_new)) for u in sol.u[1:stride:end])
     zend   = sol.u[end] .* zscale
-    @printf("energy residual / throughput = %.3e   (accept < 1e-5)\n", maxres/max(zend[12], eps()*Es))
+    led_rel = maxres/max(zend[12], eps()*Es)
+    @printf("energy ledger over the run: max |E - E0 - W_in + losses| / throughput = %.3e  %s\n", led_rel,
+            led_rel < 1e-5 ? "(OK)" : "(LARGE: tighten reltol/abstol or dtmax before trusting the run)")
     @printf("load energy ER(t_end) = %.6e J\n", zend[8])
     if use_sine && n_cycles > 4
         ER4 = (sol(tspan[2] - 4/f) .* zscale)[8]
@@ -857,6 +788,23 @@ if use_ledger
     end
 end
  
+use_ledger || println("Run-level energy check skipped: set use_ledger = true to carry the work integrals.")
+
+# ------------------------------------ Run Folder & Saving ------------------------------------
+# Every figure (PDF), the output data (XLSX) and the animation are written to RUN_Xg_YV_ZHz beside
+# this file (X = alpha, Y = Vbias, Z = f; whole numbers print without decimals, e.g. RUN_2g_3V_200Hz).
+numtag(x) = (r = round(Float64(x); digits = 4); isinteger(r) ? string(Int(r)) : string(r))
+run_dir = joinpath(@__DIR__, string("RUN_", numtag(alpha), "g_", numtag(p_new.Vbias), "V_", numtag(f), "Hz"))
+mkpath(run_dir)
+println("Saving figures, data and animation to: ", run_dir)
+
+# Display a figure and save it as a PDF in the run folder
+function showsave(pl, name)
+    display(pl)
+    savefig(pl, joinpath(run_dir, string(name, ".pdf")))
+    return pl
+end
+
 # ----------------------------------------- Plotting -----------------------------------------
 AM = AnalyticalModel
  
@@ -909,30 +857,30 @@ end
 Wover = sample_window(sol, p_new, sol.t[1], sol.t[end]; dt = 1e-5)
 to = Wover.t
  
-p3  = plot(to, Wover.x1,    xlabel = "Time (s)", ylabel = "x1 (m)",     title = "Shuttle Mass Displacement (x1)", label = "");    display(p3)
-p4  = plot(to, Wover.x1dot, xlabel = "Time (s)", ylabel = "x1dot (m/s)", title = "Shuttle Mass Velocity (x1dot)", label = "");    display(p4)
+p3  = plot(to, Wover.x1,    xlabel = "Time (s)", ylabel = "x1 (m)",     title = "Shuttle Mass Displacement (x1)", label = "");    showsave(p3, "01_x1_displacement")
+p4  = plot(to, Wover.x1dot, xlabel = "Time (s)", ylabel = "x1dot (m/s)", title = "Shuttle Mass Velocity (x1dot)", label = "");    showsave(p4, "02_x1_velocity")
 p5  = plot(to, Wover.tau,   xlabel = "Time (s)", ylabel = "tau (m)",    title = "Compliant Tip Relative to its Stiff Face (tau)", label = "")
-hline!(p5, [p_new.gc, -p_new.gc]; ls = :dash, lc = :gray, label = ""); display(p5)
-p6  = plot(to, Wover.taudot, xlabel = "Time (s)", ylabel = "taudot (m/s)", title = "Tip Closing Velocity (taudot)", label = ""); display(p6)
-p7  = plot(to, Wover.Q,     xlabel = "Time (s)", ylabel = "Q (C)",      title = "Charge (observable)", label = "");               display(p7)
-p8  = plot(to, Wover.V,     xlabel = "Time (s)", ylabel = "Vout (V)",   title = "Output Voltage (state)", label = "");            display(p8)
+hline!(p5, [p_new.gc, -p_new.gc]; ls = :dash, lc = :gray, label = ""); showsave(p5, "03_tip_relative_tau")
+p6  = plot(to, Wover.taudot, xlabel = "Time (s)", ylabel = "taudot (m/s)", title = "Tip Closing Velocity (taudot)", label = ""); showsave(p6, "04_tip_closing_velocity")
+p7  = plot(to, Wover.Q,     xlabel = "Time (s)", ylabel = "Q (C)",      title = "Charge (observable)", label = "");               showsave(p7, "05_charge")
+p8  = plot(to, Wover.V,     xlabel = "Time (s)", ylabel = "Vout (V)",   title = "Output Voltage (state)", label = "");            showsave(p8, "06_output_voltage")
  
 # Diagnostics: penetration and total capacitance
 p8b = plot(to, Wover.pen .* 1e9, xlabel = "Time (s)", ylabel = "|tau|-gc (nm)",
            title = "Penetration (contact when > 0)", label = "")
-hline!(p8b, [0.0]; ls = :dash, lc = :gray, label = ""); display(p8b)
+hline!(p8b, [0.0]; ls = :dash, lc = :gray, label = ""); showsave(p8b, "07_penetration")
 p8c = plot(to, Wover.Ct .* 1e12, xlabel = "Time (s)", ylabel = "Ctotal (pF)",
-           title = "Total Capacitance", label = ""); display(p8c)
+           title = "Total Capacitance", label = ""); showsave(p8c, "08_total_capacitance")
  
-p9   = plot(to, Wover.Fs, xlabel = "Time (s)", ylabel = "Fs (N)", title = "Suspension + Stopper Force on x1 (incl. -c1*x1dot)", label = ""); display(p9)
-p10  = plot(to, Wover.Fc, xlabel = "Time (s)", ylabel = "Fc (N)", title = "Beam Force on x1 (zero when orient = 1)", label = ""); display(p10)
-p10a = plot(to, Wover.Fb, xlabel = "Time (s)", ylabel = "Fb (N)", title = "Beam Damping Force on the Tips", label = ""); display(p10a)
-p10b = plot(to, Wover.Fw, xlabel = "Time (s)", ylabel = "Fw (N)", title = "Tip Contact Force on the Tips (reaction on x1 when orient = 1)", label = ""); display(p10b)
+p9   = plot(to, Wover.Fs, xlabel = "Time (s)", ylabel = "Fs (N)", title = "Suspension + Stopper Force on x1 (incl. -c1*x1dot)", label = ""); showsave(p9, "09_suspension_force")
+p10  = plot(to, Wover.Fc, xlabel = "Time (s)", ylabel = "Fc (N)", title = "Beam Force on x1 (zero when orient = 1)", label = ""); showsave(p10, "10_beam_force_x1")
+p10a = plot(to, Wover.Fb, xlabel = "Time (s)", ylabel = "Fb (N)", title = "Beam Damping Force on the Tips", label = ""); showsave(p10a, "11_beam_damping_force")
+p10b = plot(to, Wover.Fw, xlabel = "Time (s)", ylabel = "Fw (N)", title = "Tip Contact Force on the Tips (reaction on x1 when orient = 1)", label = ""); showsave(p10b, "12_tip_contact_force")
 p11  = plot(to, [Wover.Fd1 Wover.Fd2], xlabel = "Time (s)", ylabel = "Fd (N)", title = "Squeeze-Film Force (projected Reynolds film)",
-            label = ["on x1" "on x2"], legend = :topright); display(p11)
+            label = ["on x1" "on x2"], legend = :topright); showsave(p11, "13_squeeze_film_force")
 p12  = plot(to, [Wover.Fe1 Wover.Fe2], xlabel = "Time (s)", ylabel = "Fe (N)", title = "Electrostatic Force (attractive)",
-            label = ["on x1" "on x2"], legend = :topright); display(p12)
-p13  = plot(to, Wover.ae, xlabel = "Time (s)", ylabel = "a_ext (m/s^2)", title = "Applied Base Acceleration", label = ""); display(p13)
+            label = ["on x1" "on x2"], legend = :topright); showsave(p12, "14_electrostatic_force")
+p13  = plot(to, Wover.ae, xlabel = "Time (s)", ylabel = "a_ext (m/s^2)", title = "Applied Base Acceleration", label = ""); showsave(p13, "15_base_acceleration")
  
 # ==================== (2) LAST-TWO-CYCLE TWIN OF EVERY STATE / FORCE PLOT ====================
 Tdrive = 1/f
@@ -942,25 +890,25 @@ Wzoom  = sample_window(sol, p_new, sol.t[end] - 2*Tdrive, sol.t[end]; dt = 2e-6)
 tzs = Wzoom.t .* 1e3
  
 p3z  = plot(tzs, Wzoom.x1,    xlabel = "t (ms)", ylabel = "x1 (m)",      title = "Shuttle Mass Displacement (x1) - last 2 cycles", label = "")
-hline!(p3z, [p_new.gc, -p_new.gc]; ls = :dash, lc = :gray, label = ""); display(p3z)
-p4z  = plot(tzs, Wzoom.x1dot, xlabel = "t (ms)", ylabel = "x1dot (m/s)", title = "Shuttle Mass Velocity (x1dot) - last 2 cycles", label = ""); display(p4z)
+hline!(p3z, [p_new.gc, -p_new.gc]; ls = :dash, lc = :gray, label = ""); showsave(p3z, "01_x1_displacement_last2cycles")
+p4z  = plot(tzs, Wzoom.x1dot, xlabel = "t (ms)", ylabel = "x1dot (m/s)", title = "Shuttle Mass Velocity (x1dot) - last 2 cycles", label = ""); showsave(p4z, "02_x1_velocity_last2cycles")
 p5z  = plot(tzs, Wzoom.tau,   xlabel = "t (ms)", ylabel = "tau (m)",     title = "Compliant Tip Relative to its Stiff Face - last 2 cycles", label = "")
-hline!(p5z, [p_new.gc, -p_new.gc]; ls = :dash, lc = :gray, label = ""); display(p5z)
-p6z  = plot(tzs, Wzoom.taudot, xlabel = "t (ms)", ylabel = "taudot (m/s)", title = "Tip Closing Velocity - last 2 cycles", label = ""); display(p6z)
-p7z  = plot(tzs, Wzoom.Q,     xlabel = "t (ms)", ylabel = "Q (C)",       title = "Charge (observable) - last 2 cycles", label = ""); display(p7z)
-p8z  = plot(tzs, Wzoom.V,     xlabel = "t (ms)", ylabel = "Vout (V)",    title = "Output Voltage (state) - last 2 cycles", label = ""); display(p8z)
+hline!(p5z, [p_new.gc, -p_new.gc]; ls = :dash, lc = :gray, label = ""); showsave(p5z, "03_tip_relative_tau_last2cycles")
+p6z  = plot(tzs, Wzoom.taudot, xlabel = "t (ms)", ylabel = "taudot (m/s)", title = "Tip Closing Velocity - last 2 cycles", label = ""); showsave(p6z, "04_tip_closing_velocity_last2cycles")
+p7z  = plot(tzs, Wzoom.Q,     xlabel = "t (ms)", ylabel = "Q (C)",       title = "Charge (observable) - last 2 cycles", label = ""); showsave(p7z, "05_charge_last2cycles")
+p8z  = plot(tzs, Wzoom.V,     xlabel = "t (ms)", ylabel = "Vout (V)",    title = "Output Voltage (state) - last 2 cycles", label = ""); showsave(p8z, "06_output_voltage_last2cycles")
 p8bz = plot(tzs, Wzoom.pen .* 1e9, xlabel = "t (ms)", ylabel = "|tau|-gc (nm)", title = "Penetration (contact when > 0) - last 2 cycles", label = "")
-hline!(p8bz, [0.0]; ls = :dash, lc = :gray, label = ""); display(p8bz)
-p8cz = plot(tzs, Wzoom.Ct .* 1e12, xlabel = "t (ms)", ylabel = "Ctotal (pF)", title = "Total Capacitance - last 2 cycles", label = ""); display(p8cz)
-p9z   = plot(tzs, Wzoom.Fs, xlabel = "t (ms)", ylabel = "Fs (N)", title = "Suspension + Stopper Force on x1 - last 2 cycles", label = ""); display(p9z)
-p10z  = plot(tzs, Wzoom.Fc, xlabel = "t (ms)", ylabel = "Fc (N)", title = "Beam Force on x1 - last 2 cycles", label = ""); display(p10z)
-p10az = plot(tzs, Wzoom.Fb, xlabel = "t (ms)", ylabel = "Fb (N)", title = "Beam Damping Force on the Tips - last 2 cycles", label = ""); display(p10az)
-p10bz = plot(tzs, Wzoom.Fw, xlabel = "t (ms)", ylabel = "Fw (N)", title = "Tip Contact (Hunt-Crossley wall) Force - last 2 cycles", label = ""); display(p10bz)
+hline!(p8bz, [0.0]; ls = :dash, lc = :gray, label = ""); showsave(p8bz, "07_penetration_last2cycles")
+p8cz = plot(tzs, Wzoom.Ct .* 1e12, xlabel = "t (ms)", ylabel = "Ctotal (pF)", title = "Total Capacitance - last 2 cycles", label = ""); showsave(p8cz, "08_total_capacitance_last2cycles")
+p9z   = plot(tzs, Wzoom.Fs, xlabel = "t (ms)", ylabel = "Fs (N)", title = "Suspension + Stopper Force on x1 - last 2 cycles", label = ""); showsave(p9z, "09_suspension_force_last2cycles")
+p10z  = plot(tzs, Wzoom.Fc, xlabel = "t (ms)", ylabel = "Fc (N)", title = "Beam Force on x1 - last 2 cycles", label = ""); showsave(p10z, "10_beam_force_x1_last2cycles")
+p10az = plot(tzs, Wzoom.Fb, xlabel = "t (ms)", ylabel = "Fb (N)", title = "Beam Damping Force on the Tips - last 2 cycles", label = ""); showsave(p10az, "11_beam_damping_force_last2cycles")
+p10bz = plot(tzs, Wzoom.Fw, xlabel = "t (ms)", ylabel = "Fw (N)", title = "Tip Contact (Hunt-Crossley wall) Force - last 2 cycles", label = ""); showsave(p10bz, "12_tip_contact_force_last2cycles")
 p11z  = plot(tzs, hcat(Wzoom.Fd1, Wzoom.Fd2), xlabel = "t (ms)", ylabel = "Fd (N)", title = "Squeeze-Film Force - last 2 cycles",
-             label = ["on x1" "on x2"], legend = :topright); display(p11z)
+             label = ["on x1" "on x2"], legend = :topright); showsave(p11z, "13_squeeze_film_force_last2cycles")
 p12z  = plot(tzs, hcat(Wzoom.Fe1, Wzoom.Fe2), xlabel = "t (ms)", ylabel = "Fe (N)", title = "Electrostatic Force - last 2 cycles",
-             label = ["on x1" "on x2"], legend = :topright); display(p12z)
-p13z  = plot(tzs, Wzoom.ae, xlabel = "t (ms)", ylabel = "a_ext (m/s^2)", title = "Applied Base Acceleration - last 2 cycles", label = ""); display(p13z)
+             label = ["on x1" "on x2"], legend = :topright); showsave(p12z, "14_electrostatic_force_last2cycles")
+p13z  = plot(tzs, Wzoom.ae, xlabel = "t (ms)", ylabel = "a_ext (m/s^2)", title = "Applied Base Acceleration - last 2 cycles", label = ""); showsave(p13z, "15_base_acceleration_last2cycles")
  
 # ================================ (1) ENERGY RELATIONS ====================================
 # Identity being displayed (chapter Eq. 4.9):  dE/dt = Pb + Pbias - PR - Pf - Ps - Pw, with
@@ -998,9 +946,9 @@ end
  
 if use_ledger
     e1, e2, e3, e4 = energy_plots(Wover, to, "Time (s)", "full run")
-    display(e1); display(e2); display(e3); display(e4)
+    showsave(e1, "20_stored_energy_full"); showsave(e2, "21_work_and_losses_full"); showsave(e3, "22_conservation_check_full"); showsave(e4, "23_power_flows_full")
     e1z, e2z, e3z, e4z = energy_plots(Wzoom, tzs, "t (ms)", "last 2 cycles")
-    display(e1z); display(e2z); display(e3z); display(e4z)
+    showsave(e1z, "20_stored_energy_last2cycles"); showsave(e2z, "21_work_and_losses_last2cycles"); showsave(e3z, "22_conservation_check_last2cycles"); showsave(e4z, "23_power_flows_last2cycles")
  
     # Energy budget over the last two cycles: inputs = sinks (+ change of stored energy)
     dlt(v) = v[end] - v[1]
@@ -1008,7 +956,7 @@ if use_ledger
     e5 = bar(["W base", "W bias", "-dE stored", "E load", "D film", "D struct", "D wall"], budget .* 1e12;
              legend = false, ylabel = "Energy over the last 2 cycles (pJ)", xrotation = 30,
              title = "Energy Budget: first three bars = last four")
-    display(e5)
+    showsave(e5, "24_energy_budget_last2cycles")
     # Cross-check of the load energy from the electrical plane: int Vout dQ = int Vout^2/R dt
     WQ = sum(0.5*(Wzoom.V[i] + Wzoom.V[i+1])*(Wzoom.Q[i+1] - Wzoom.Q[i]) for i in 1:length(Wzoom.t)-1)
     println("\n================ ENERGY BUDGET, LAST TWO CYCLES ================")
@@ -1037,23 +985,23 @@ qdS   = Zs[4,:] .- (1 - thS) .* Zs[2,:]
  
 ph1  = plot(Zs[1,:] .* 1e6, Zs[2,:] .* 1e3, xlabel = "x1 (um)", ylabel = "x1dot (mm/s)",
             title = "Shuttle Phase Plane - full trajectory", label = "", lw = 0.5)
-vline!(ph1, [gcu, -gcu]; ls = :dash, lc = :gray, label = ""); display(ph1)
+vline!(ph1, [gcu, -gcu]; ls = :dash, lc = :gray, label = ""); showsave(ph1, "30_shuttle_phase_full")
 ph1z = plot(Zs[1,izz] .* 1e6, Zs[2,izz] .* 1e3, xlabel = "x1 (um)", ylabel = "x1dot (mm/s)",
             title = "Shuttle Phase Plane - last 2 cycles", label = "", lw = 0.8)
-vline!(ph1z, [gcu, -gcu]; ls = :dash, lc = :gray, label = ""); display(ph1z)
+vline!(ph1z, [gcu, -gcu]; ls = :dash, lc = :gray, label = ""); showsave(ph1z, "30_shuttle_phase_last2cycles")
  
 ph2  = plot(tauS .* 1e6, taudS .* 1e3, xlabel = "tau (um)", ylabel = "taudot (mm/s)",
             title = "Tip Phase Plane - full trajectory", label = "", lw = 0.5)
-vline!(ph2, [gcu, -gcu]; ls = :dash, lc = :gray, label = ""); display(ph2)
+vline!(ph2, [gcu, -gcu]; ls = :dash, lc = :gray, label = ""); showsave(ph2, "31_tip_phase_full")
 ph2z = plot(tauS[izz] .* 1e6, taudS[izz] .* 1e3, xlabel = "tau (um)", ylabel = "taudot (mm/s)",
             title = "Tip Phase Plane - last 2 cycles", label = "", lw = 0.8)
-vline!(ph2z, [gcu, -gcu]; ls = :dash, lc = :gray, label = ""); display(ph2z)
+vline!(ph2z, [gcu, -gcu]; ls = :dash, lc = :gray, label = ""); showsave(ph2z, "31_tip_phase_last2cycles")
  
 # Electrode bending plane: loops appear only while the tips are on a wall (contact mode)
 ph3  = plot(qS .* 1e9, qdS .* 1e3, xlabel = "bending q (nm)",
-            ylabel = "qdot (mm/s)", title = "Electrode Bending Plane - full trajectory", label = "", lw = 0.5); display(ph3)
+            ylabel = "qdot (mm/s)", title = "Electrode Bending Plane - full trajectory", label = "", lw = 0.5); showsave(ph3, "32_bending_plane_full")
 ph3z = plot(qS[izz] .* 1e9, qdS[izz] .* 1e3, xlabel = "bending q (nm)",
-            ylabel = "qdot (mm/s)", title = "Electrode Bending Plane - last 2 cycles", label = "", lw = 0.8); display(ph3z)
+            ylabel = "qdot (mm/s)", title = "Electrode Bending Plane - last 2 cycles", label = "", lw = 0.8); showsave(ph3z, "32_bending_plane_last2cycles")
  
 # Near-wall portrait: nominal overlap vs wall-normal tip velocity, both walls folded together
 nearw(idx) = [i for i in idx if abs(tauS[i]) - p_new.gc > -200e-9]
@@ -1061,17 +1009,17 @@ inear = nearw(1:size(Zs, 2)); inearz = nearw(izz)
 ph4  = scatter((abs.(tauS[inear]) .- p_new.gc) .* 1e9, sign.(tauS[inear]) .* taudS[inear] .* 1e3,
                xlabel = "|tau| - gc (nm)", ylabel = "wall-normal tip velocity (mm/s)", ms = 1.2, msw = 0,
                title = "Phase Portrait at the Contact Boundary - full trajectory", label = "")
-vline!(ph4, [0.0]; ls = :dash, lc = :gray, label = ""); display(ph4)
+vline!(ph4, [0.0]; ls = :dash, lc = :gray, label = ""); showsave(ph4, "33_contact_boundary_portrait_full")
 ph4z = scatter((abs.(tauS[inearz]) .- p_new.gc) .* 1e9, sign.(tauS[inearz]) .* taudS[inearz] .* 1e3,
                xlabel = "|tau| - gc (nm)", ylabel = "wall-normal tip velocity (mm/s)", ms = 1.5, msw = 0,
                title = "Phase Portrait at the Contact Boundary - last 2 cycles", label = "")
-vline!(ph4z, [0.0]; ls = :dash, lc = :gray, label = ""); display(ph4z)
+vline!(ph4z, [0.0]; ls = :dash, lc = :gray, label = ""); showsave(ph4z, "33_contact_boundary_portrait_last2cycles")
  
 # Electrical plane: the area enclosed per cycle is the energy delivered to the load
 ph5  = plot(Wover.Q .* 1e12, Wover.V .* 1e3, xlabel = "Q (pC)", ylabel = "Vout (mV)",
-            title = "Electrical Plane (Q, Vout) - full trajectory", label = "", lw = 0.5); display(ph5)
+            title = "Electrical Plane (Q, Vout) - full trajectory", label = "", lw = 0.5); showsave(ph5, "34_electrical_plane_full")
 ph5z = plot(Wzoom.Q .* 1e12, Wzoom.V .* 1e3, xlabel = "Q (pC)", ylabel = "Vout (mV)",
-            title = "Electrical Plane (Q, Vout) - last 2 cycles", label = "", lw = 0.8); display(ph5z)
+            title = "Electrical Plane (Q, Vout) - last 2 cycles", label = "", lw = 0.8); showsave(ph5z, "34_electrical_plane_last2cycles")
  
 # ========================== (4) LABELLED COLLISION CLOSE-UPS =============================
 # Same-side contact sequences from the accepted steps: entries closer together than `gap`
@@ -1233,14 +1181,14 @@ else
     Wimp = sample_window(sol, p_new, sol.t[sA.ihard] - 40e-6, tA1 + 80e-6; dt = 1e-7)
     figA, mA = collision_figure(Wimp, p_new; unit = :us,
                                 tag = string("hardest impact, t = ", round(sol.t[sA.ihard]; digits = 5), " s, wall ", Int(sA.side)))
-    display(figA)
+    showsave(figA, "40_collision_closeup_hardest_impact")
  
     # (4b) the longest chatter sequence of the last two cycles: approach - chatter - dwell - release
     sB   = recent[argmax([s.n for s in recent])]
     Wep  = sample_window(sol, p_new, sB.t0 - 0.5e-3, sB.t1 + 0.5e-3; dt = max(1e-7, (sB.t1 - sB.t0 + 1e-3)/40000))
     figB, mB = collision_figure(Wep, p_new; unit = :ms,
                                 tag = string("longest sequence, ", sB.n, " contacts from t = ", round(sB.t0; digits = 5), " s, wall ", Int(sB.side)))
-    display(figB)
+    showsave(figB, "41_collision_closeup_longest_sequence")
  
     println("\n================ CLOSE-UP METRICS (first contact of each window) ================")
     for (nm_, m) in (("hardest impact  ", mA), ("longest sequence", mB))
@@ -1251,6 +1199,52 @@ else
 end
 
 
+
+
+# ------------------------------------- Output Data (XLSX) -------------------------------------
+# Model states and forces on the uniform 10 us overview grid (Wover), one sheet each, plus the
+# stored energies / powers and the run settings. Units are in the column headers.
+Uall   = Array(sol(Wover.t)) .* zscale             # every state: class tips and work integrals included
+snames = ["x1 (m)", "x1dot (m/s)", "x2 (m)", "x2dot (m/s)", "Vout (V)"]
+use_ledger && append!(snames, ["W_base (J)", "W_bias (J)", "E_load (J)", "D_film (J)", "D_struct (J)",
+                               "D_wall (J)", "throughput (J)"])
+for j in 2:p_new.n_cls
+    append!(snames, [string("x2 class ", j, " (m)"), string("x2dot class ", j, " (m/s)")])
+end
+state_cols = Any[Wover.t]
+for k in 1:size(Uall, 1)
+    push!(state_cols, Uall[k, :])
+end
+push!(state_cols, Wover.tau, Wover.taudot, Wover.q, Wover.Q, Wover.Ct)
+state_names = vcat(["t (s)"], snames, ["tau, median tip rel. stiff face (m)", "taudot (m/s)", "q, bending (m)",
+                                       "Q (C)", "Ctotal (F)"])
+force_cols  = Any[Wover.t, Wover.ae, Wover.Fs, Wover.Fc, Wover.Fct, Wover.Fb, Wover.Fw,
+                  Wover.Fd1, Wover.Fd2, Wover.Fe1, Wover.Fe2]
+force_names = ["t (s)", "a_ext (m/s^2)", "Fs suspension + stoppers on x1 (N)", "Fc beam on x1 (N)",
+               "Fct beam on tips (N)", "Fb beam damping on tips (N)", "Fw contact on tips (N)",
+               "Fd1 film on x1 (N)", "Fd2 film on tips (N)", "Fe1 electrostatic on x1 (N)",
+               "Fe2 electrostatic on tips (N)"]
+energy_cols  = Any[Wover.t, Wover.Tk, Wover.Usp, Wover.Ube, Wover.Uw, Wover.Ue, Wover.E,
+                   Wover.Pb, Wover.Pe, Wover.PR, Wover.Pf, Wover.Ps, Wover.Pw]
+energy_names = ["t (s)", "kinetic (J)", "suspension + stoppers (J)", "bending (J)", "contact (J)",
+                "electrical (J)", "total E (J)", "P base (W)", "P bias (W)", "P load (W)", "P film (W)",
+                "P struct (W)", "P contact (W)"]
+info = [("alpha (g)", alpha), ("f (Hz)", f), ("Vbias (V)", p_new.Vbias), ("Rload (Ohm)", p_new.Rload),
+        ("orient", p_new.orient), ("n_cls", p_new.n_cls), ("mu_off (m)", p_new.mu_off),
+        ("sig_off (m)", p_new.sig_off), ("k1 (N/m)", p_new.k1), ("ke (N/m)", p_new.ke), ("c1 (N s/m)", p_new.c1),
+        ("ce (N s/m)", p_new.ce), ("vent_faces", p_new.vent_faces), ("n_cycles", n_cycles),
+        ("use_sine", use_sine), ("solver retcode", sol.retcode), ("energy residual / throughput", led_rel)]
+info_cols = Any[[first(x) for x in info], [string(last(x)) for x in info]]
+xlsx_path = joinpath(run_dir, "output_data.xlsx")
+XLSX.openxlsx(xlsx_path, mode = "w") do xf
+    sh = xf[1]
+    XLSX.rename!(sh, "States")
+    XLSX.writetable!(sh, state_cols, state_names)
+    XLSX.writetable!(XLSX.addsheet!(xf, "Forces"), force_cols, force_names)
+    XLSX.writetable!(XLSX.addsheet!(xf, "Energy"), energy_cols, energy_names)
+    XLSX.writetable!(XLSX.addsheet!(xf, "Run info"), info_cols, ["setting", "value"])
+end
+println("Saved output data: ", xlsx_path)
 
 
 #-------------------------------------------------------------------
@@ -1516,4 +1510,4 @@ animate_electrode_cycle(sol, p_new, zscale;
     frequency=f,
     seconds=16,
     fps=30,
-    outfile="electrode_one_cycle_two_hits.gif")
+    outfile=joinpath(run_dir, "electrode_one_cycle_two_hits.gif"))

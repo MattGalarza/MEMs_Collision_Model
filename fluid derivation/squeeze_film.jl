@@ -30,8 +30,8 @@ Base.@kwdef struct Fluid
     eta::Float64 = 1.849e-5      # dynamic viscosity, Pa s
     pa::Float64 = 101325.0       # ambient pressure, Pa
     rho::Float64 = 1.204         # density, kg/m^3
-    lam::Float64 = 70e-9         # mean free path, m
-    sig_p::Float64 = 1.016       # slip coefficient
+    lam::Float64 = eta * sqrt(2 / (rho * pa))   # equivalent free path η v0/p, v0 = sqrt(2kT/m) = sqrt(2p/ρ), m
+    sig_p::Float64 = 1.016191    # viscous slip coefficient, BGK, diffuse walls (referred to lam)
     npoly::Float64 = 1.0         # polytropic index (1 = isothermal)
 end
 nu(fl::Fluid) = fl.eta / fl.rho
@@ -39,7 +39,10 @@ bslip(fl::Fluid) = fl.sig_p * fl.lam            # Navier slip length b
 kp(fl::Fluid) = 6 * bslip(fl)                    # k_p = 6 σ_p λ, G0 = h²(h + k_p)
 
 "Womersley mobility with first-order slip (complex). q = −G ∇p/(12η)."
-function G_mob(h::Real, w::Real, fl::Fluid; slip::Bool=true, wom::Bool=true)
+function G_mob(h::Real, w::Real, fl::Fluid; slip::Bool=true, wom::Bool=true, kinetic::Bool=false)
+    # kinetic: times the BGK flow factor (exact in the steady rarefied and inertial continuum limits; within 1e-4 of
+    # oscillatory BGK for the case study at 100 kHz)
+    kinetic && slip && return G_mob(h, w, fl; slip=true, wom=wom, kinetic=false) * kin_factor(h, fl)
     b = slip ? bslip(fl) : 0.0
     G0 = h^2 * (h + 6b)
     (!wom || w == 0) && return complex(G0)
@@ -61,6 +64,7 @@ Base.@kwdef struct Config
     comp::Bool = true            # compressibility
     exit::Bool = true            # lateral exit factor f(h, ω)
     exit_omega::Bool = true      # frequency dependence of f
+    kinetic::Bool = true         # linearized-BGK flow factor in the mobility (false: first-order slip)
     N::Int = 24                  # exact thickness modes
     M::Int = 2000                # explicit tail terms (local balance)
 end
@@ -69,52 +73,119 @@ ld(cfg::Config) = cfg.faces == :one ? cfg.W : cfg.W / 2
 # ----------------------------------------------------------------------------- lateral exit factor
 # f0(h) = (1 + 2 c(X) X)^3,  c(X) = c0 + c1 X/(X + x0),  X = h/(2 ℓd)   (fits to 2-D Stokes cells, < 0.21 %)
 const F0_COEF = Dict(:one => (0.4207, 0.2449, 1.0015), :two => (0.4066, 0.1279, 0.2733))
-# frequency correction f/f0 − 1 relative to the Womersley strip, one open face, comb geometry of the case study
+# frequency correction f/f0 − 1 relative to the Womersley strip, one open face, comb geometry of the case study:
+# oscillatory 2-D Stokes cells at half-decade frequencies, 100 Hz – 100 kHz (rows: gaps H_TAB; columns: F_TAB)
 const H_TAB = [0.5, 1.0, 2.0, 4.0, 8.0, 13.76, 18.426666666666666, 25.42666666666667, 32.42666666666667]   # μm
-const W_TAB = 2π .* [0.0, 300.0, 1000.0, 3000.0, 10000.0]                                                # rad/s
+const F_TAB = [100.0, 300.0, 1000.0, 3000.0, 10000.0, 30000.0, 100000.0]   # Hz
+const W_TAB = 2π .* F_TAB                                                                    # rad/s
 const DF_RE = [
-    0.000000e+00  1.029372e-09  3.529997e-09  2.074261e-08  1.997910e-07;
-    0.000000e+00  1.925826e-08  4.894635e-08  2.043413e-07  1.692664e-06;
-    0.000000e+00  3.199716e-07  7.003564e-07  2.219530e-06  1.511431e-05;
-    0.000000e+00  4.828726e-06  9.860482e-06  2.611164e-05  1.460743e-04;
-    0.000000e+00  6.333553e-05  1.260565e-04  3.076258e-04  1.512227e-03;
-    0.000000e+00  4.165356e-04  8.279783e-04  1.998578e-03  9.354829e-03;
-    0.000000e+00  1.081416e-03  2.129399e-03  4.945629e-03  2.136432e-02;
-    0.000000e+00  2.932301e-03  5.715869e-03  1.260737e-02  4.640307e-02;
-    0.000000e+00  6.023225e-03  1.159824e-02  2.384944e-02  6.579589e-02]
+    4.930871266850545e-10 1.029372365124459e-09 3.5299974054936456e-09 2.0742613626723028e-08 1.9979098264677475e-07 1.4269531876109909e-06 7.3759677263751655e-06
+    1.0413612194781763e-08 1.9258259875698513e-08 4.894635430297001e-08 2.043413191987753e-07 1.6926643149339782e-06 1.1651598524675677e-05 5.977400871715055e-05
+    1.790121824107871e-07 3.1997157923235875e-07 7.00356361571508e-07 2.2195297963989447e-06 1.5114307648111946e-05 9.804848466243854e-05 0.000504068697839033
+    2.7369657242815038e-06 4.828726461569843e-06 9.860481912093988e-06 2.6111644112036814e-05 0.00014607430318291925 0.0008756076765399357 0.004641897835421016
+    3.6056393674765985e-05 6.33355290051707e-05 0.000126056536631447 0.00030762576564113964 0.0015122274879417752 0.00833796987444102 0.044819882720136706
+    0.00023705671681972795 0.00041653564806010124 0.000827978266419338 0.001998578119734029 0.009354829394971453 0.046446508629397254 0.17996862181414475
+    0.0006160889087654109 0.001081416403281521 0.002129399465274018 0.0049456293118139705 0.02136431863589694 0.09390560927073333 0.21402616208106107
+    0.00167139478758771 0.0029323008487662783 0.005715868832835147 0.012607365081189092 0.046403072578815596 0.13656911961710705 0.11772021269121158
+    0.0034347901702922456 0.006023224541664485 0.011598235905109444 0.023849443228960432 0.06579588861893337 0.08947758568071351 -0.02649471189698449]
 const DF_IM = [
-    0.000000e+00  3.201702e-07  1.065880e-06  3.194973e-06  1.061631e-05;
-    0.000000e+00  2.132756e-06  7.082087e-06  2.119825e-05  7.032852e-05;
-    0.000000e+00  1.360231e-05  4.487508e-05  1.338531e-04  4.425611e-04;
-    0.000000e+00  8.150571e-05  2.645503e-04  7.821472e-04  2.564419e-03;
-    0.000000e+00  4.468457e-04  1.395322e-03  4.034791e-03  1.292767e-02;
-    0.000000e+00  1.565250e-03  4.596279e-03  1.277487e-02  3.882903e-02;
-    0.000000e+00  2.738017e-03  7.506939e-03  1.986747e-02  5.657455e-02;
-    0.000000e+00  4.734163e-03  1.135626e-02  2.670880e-02  6.212154e-02;
-    0.000000e+00  6.722794e-03  1.323891e-02  2.422856e-02  2.829901e-02]
+    1.06774053210707e-07 3.201701608259986e-07 1.0658800767759546e-06 3.1949725155076796e-06 1.0616312090545994e-05 3.129325628652446e-05 9.879225953666778e-05
+    7.151856559015418e-07 2.132755570093563e-06 7.0820872542659904e-06 2.1198247416837e-05 7.0328523749068e-05 0.00020635418578850384 0.0006438570670016288
+    4.606923714058222e-06 1.360230535472074e-05 4.487508449518803e-05 0.0001338530861915424 0.0004425611483669063 0.001287742918615706 0.0039416406649351865
+    2.8285442185999945e-05 8.150570747944809e-05 0.000264550336139876 0.0007821471739812263 0.002564418714168723 0.007329010820110048 0.021557869455570193
+    0.00016368205696471038 0.00044684566058424434 0.0013953224729276025 0.004034790724196143 0.012927669386713745 0.03513281921049477 0.08902571934034353
+    0.0006186902519569605 0.0015652497585513202 0.004596278545178677 0.012774870801075214 0.03882902699020296 0.0915547713259698 0.12528119467806492
+    0.0011649050054218322 0.00273801681061391 0.007506939295488353 0.019867471195868517 0.0565745539333774 0.10687201811248953 0.04383347165639794
+    0.0022637071471180415 0.004734163238234336 0.011356256560514031 0.026708801870476126 0.06212154223533083 0.04843101599949223 -0.06289446562152184
+    0.0036535746160106367 0.006722794430620192 0.013238911501491412 0.02422855696261024 0.028299013802735626 -0.054816164160152316 -0.10947153965117401]
 
+# log|Δf| and arg Δf: monotone cubic (Fritsch–Carlson) in log ω, linear in log h. Exact for a power law in either
+# variable, so it carries both the iω scaling of thin gaps and the √(iω) Stokes-layer scaling of wide gaps.
+"Fritsch–Carlson slopes of each row of Y on nodes x (zero at interior extrema, secant slopes at the ends)."
+function pchip_slopes(x::Vector{Float64}, Y::Matrix{Float64})
+    hx = diff(x)
+    S = diff(Y, dims=2) ./ hx'
+    D = zeros(size(Y))
+    D[:, 1] = S[:, 1]
+    D[:, end] = S[:, end]
+    for k in 2:length(x)-1
+        w1 = 2hx[k] + hx[k-1]
+        w2 = hx[k] + 2hx[k-1]
+        for r in axes(Y, 1)
+            a, b = S[r, k-1], S[r, k]
+            D[r, k] = a * b > 0 ? (w1 + w2) / (w1 / a + w2 / b) : 0.0
+        end
+    end
+    return D
+end
+const LOG_H = log.(H_TAB)
+const LOG_W = log.(W_TAB)
+const LOG_ABS_DF = log.(abs.(complex.(DF_RE, DF_IM)))
+const ARG_DF = angle.(complex.(DF_RE, DF_IM))          # continuous over the table, no unwrapping needed
+const D_LA = pchip_slopes(LOG_W, LOG_ABS_DF)
+const D_PH = pchip_slopes(LOG_W, ARG_DF)
+
+"Cubic Hermite in log ω along table row i. Below the band: log|Δf| extended linearly (power law of the first interval,
+Δf → 0) with the phase held. Above it: Δf held, since cell and strip both turn inertial and their ratio saturates;
+this keeps Re(G/f) > 0 (passivity) up to 2.8 MHz for the case study."
+function along_w(T::Matrix{Float64}, DT::Matrix{Float64}, i::Int, lw::Float64, hold::Bool)
+    n = length(LOG_W)
+    lw <= LOG_W[1] && return hold ? T[i, 1] : T[i, 1] + DT[i, 1] * (lw - LOG_W[1])
+    lw >= LOG_W[n] && return T[i, n]
+    j = clamp(searchsortedlast(LOG_W, lw), 1, n - 1)
+    dx = LOG_W[j+1] - LOG_W[j]
+    t = (lw - LOG_W[j]) / dx
+    return (2t^3 - 3t^2 + 1) * T[i, j] + (t^3 - 2t^2 + t) * dx * DT[i, j] +
+           (-2t^3 + 3t^2) * T[i, j+1] + (t^3 - t^2) * dx * DT[i, j+1]
+end
+
+"Steady exit factor f0(h) = (1 + 2 c(X) X)^3 with c(X) = c0 + c1 X/(X + x0), X = h/(2ℓd)."
 function f0_exit(h::Real, cfg::Config)
     c0, c1, x0 = F0_COEF[cfg.faces]
     X = h / (2 * ld(cfg))
     return (1 + 2 * (c0 + c1 * X / (X + x0)) * X)^3
 end
 
-"Lateral exit factor f(h, ω) = f0(h)[1 + Δf(h, ω)] (Δf tabulated for one open face; zero otherwise)."
+"Lateral exit factor f(h, ω) = f0(h)[1 + Δf(h, ω)]; h clamped to the table range (one open face only)."
 function f_exit(h::Real, w::Real, cfg::Config)
     f0 = f0_exit(h, cfg)
     (w == 0 || cfg.faces != :one || !cfg.exit_omega) && return complex(f0)
-    lH = log.(H_TAB)
     lh = log(clamp(h * 1e6, H_TAB[1], H_TAB[end]))
-    i = clamp(searchsortedlast(lH, lh), 1, length(lH) - 1)
-    th = (lh - lH[i]) / (lH[i+1] - lH[i])
-    wf = min(w, W_TAB[end])
-    j = clamp(searchsortedlast(W_TAB, wf), 1, length(W_TAB) - 1)
-    tw = (wf - W_TAB[j]) / (W_TAB[j+1] - W_TAB[j])
-    DF(a, b) = complex(DF_RE[a, b], DF_IM[a, b])
-    df = (1 - th) * (1 - tw) * DF(i, j) + th * (1 - tw) * DF(i + 1, j) +
-         (1 - th) * tw * DF(i, j + 1) + th * tw * DF(i + 1, j + 1)
-    return f0 * (1 + df)
+    i = clamp(searchsortedlast(LOG_H, lh), 1, length(LOG_H) - 1)
+    th = (lh - LOG_H[i]) / (LOG_H[i+1] - LOG_H[i])
+    lw = log(Float64(w))
+    la = (1 - th) * along_w(LOG_ABS_DF, D_LA, i, lw, false) + th * along_w(LOG_ABS_DF, D_LA, i + 1, lw, false)
+    ph = (1 - th) * along_w(ARG_DF, D_PH, i, lw, true) + th * along_w(ARG_DF, D_PH, i + 1, lw, true)
+    return f0 * (1 + exp(la + im * ph))
 end
+
+# ----------------------------------------------------------------------------- kinetic flow factor
+# Linearized BGK plane Poiseuille flow, diffuse walls (validated against Barichello et al. 2001 to seven digits):
+# reduced flow rate G_P(δ), δ = h/lam, tabulated for 1e-5 ≤ δ ≤ 60; ln(δ G_P) (monotone) by PCHIP in ln δ.
+const KIN_D = [9.999999999999999e-06, 1.1388973796922415e-05, 1.2970872414698539e-05, 1.4772492605422543e-05, 1.682435311983875e-05, 1.916121168320134e-05, 2.1822653777726372e-05, 2.4853763205383563e-05, 2.8305885790102787e-05, 3.2237499156215916e-05, 3.671520331684516e-05, 4.181484885242285e-05, 4.7622821790251516e-05, 5.423750695046804e-05, 6.177095454692779e-05, 7.03507782745846e-05, 8.012231703623429e-05, 9.125109692743828e-05, 0.0001039256351847022, 0.00011836063359470917, 0.00013480061545972778, 0.00015352406772798543, 0.00017484815845509683, 0.00019913410950852365, 0.00022679331552660548, 0.0002582943127849667, 0.00029417071602020684, 0.0003350302576576041, 0.0003815650825638619, 0.0004345634727140361, 0.0004949232003839766, 0.0005636667360662092, 0.0006419585687254839, 0.0007311249317924354, 0.0008326762690460736, 0.0009483328209484852, 0.0010800537648543815, 0.0012300704027193954, 0.0014009239584940997, 0.0015955086254770129, 0.00181712059283214, 0.002069513881761337, 0.002356963937174706, 0.002684340052077382, 0.0030571878515138653, 0.003481823233316095, 0.003965439356975268, 0.004516228492987621, 0.0051435207967550425, 0.005857942357816869, 0.006671595201705823, 0.007598262293590093, 0.008653641016384118, 0.00985560907835718, 0.011224527354612058, 0.012783584792451562, 0.014559191223196672, 0.01658142473453697, 0.01888454118172828, 0.021507554468560564, 0.024494897427831785, 0.02789717449638785, 0.03177201893475335, 0.036185069112322873, 0.04121108039600719, 0.046935191477298896, 0.05345436658884934, 0.06087903804114902, 0.06933497690324891, 0.07896542351613227, 0.08993351392881116, 0.10242504336003874, 0.11665161349761234, 0.13285421694930283, 0.15130731956462556, 0.1723235097804087, 0.19625879374827782, 0.2235186259414737, 0.25456477739715466, 0.28992315793955825, 0.3301927248894628, 0.37605562917005037, 0.42828877068028764, 0.4877769586793909, 0.5555279001142092, 0.632689269786006, 0.72056815151868, 0.8206531796543067, 0.9346397559443963, 1.0644587690012692, 1.2123093028059746, 1.3806958883422527, 1.5724709293848431, 1.7908830211186217, 2.0396319800873237, 2.3229315176579513, 2.6455806186651625, 3.013044834362333, 3.431548866750505, 3.908182012628031, 4.451018253542416, 5.069253025921794, 5.773358988219298, 6.57526342370561, 7.488550284044557, 8.528690296191936, 9.713303030539645, 11.062455369638311, 12.599001433443439, 14.348969719287528, 16.342004014579885, 18.611865551125124, 21.1970049073607, 24.141213346316686, 27.494364622711448, 31.31325982510913, 35.66258956443913, 40.6160298079796, 46.25748992180995, 52.68253406308962, 60.0]
+const KIN_G = [6.853741530642733, 6.780417036395427, 6.70709864625514, 6.633787027380521, 6.560482917199392, 6.48718713044266, 6.41390056682413, 6.340624219433568, 6.267359183879465, 6.194106668252924, 6.120868003978412, 6.047644657601969, 5.974438243602629, 5.901250538281386, 5.8280834948168305, 5.7549392595535895, 5.6818201896005185, 5.608728871830426, 5.535668143342408, 5.462641113487963, 5.389651187520524, 5.316702091962343, 5.243797901751522, 5.170943069249882, 5.0981424551656565, 5.0254013614606245, 4.9527255662769125, 4.8801213609322325, 4.8075955889972075, 4.735155687468187, 4.662809730019578, 4.590566472306283, 4.518435399255351, 4.446426774265302, 4.3745516901962125, 4.302822122003805, 4.231250980833252, 4.159852169350721, 4.088640638050669, 4.017632442232379, 3.946844799300257, 3.8762961459934604, 3.806006195114114, 3.7359959912760687, 3.6662879651664415, 3.5969059857725214, 3.527875410009863, 3.459223129163532, 3.3909776115586183, 3.323168940877811, 3.2558288495786902, 3.1889907469017262, 3.122689741036616, 3.056962655101532, 2.9918480367196945, 2.927386161125368, 2.863619027925489, 2.8005903518623176, 2.7383455481908214, 2.6769317135839907, 2.6163976038294536, 2.556793609967119, 2.498171734955004, 2.440585573428212, 2.3840902976452587, 2.328742653289812, 2.2746009694234677, 2.221725187563767, 2.1701769156012727, 2.1200195130720405, 2.0713182151818263, 2.0241403039436197, 1.9785553358634986, 1.9346354368070882, 1.8924556760352085, 1.8520945329388177, 1.8136344717810189, 1.7771626418067477, 1.742771722478073, 1.7105609363879222, 1.6806372556853115, 1.6531168316761178, 1.628126681746306, 1.605806672958995, 1.5863118477019629, 1.5698151436621617, 1.556510568243731, 1.5466168963235072, 1.5403819699286554, 1.538087688900252, 1.5400557926824134, 1.5466545447246993, 1.5583064421830306, 1.5754970841082905, 1.5987853405392412, 1.628814972327681, 1.6663278568362379, 1.7121789780994436, 1.7673533428030044, 1.8329849880382287, 1.9103782575637671, 2.0010315465136164, 2.1066637580670333, 2.2292437879428237, 2.371023623157809, 2.534574541208286, 2.7228299396244884, 2.9391323933134523, 3.1872874929151367, 3.471626484771623, 3.7970783108401807, 4.169252301257675, 4.594533428667247, 5.080191711431437, 5.634507196738212, 6.266911469811236, 6.98814994844532, 7.810465596892156, 8.747807880198096, 9.816070350514547, 11.033360902484304]
+const LKD = log.(KIN_D)
+const LKG = log.(KIN_D .* KIN_G)
+const DKG = pchip_slopes(LKD, reshape(LKG, 1, :))[1, :]
+
+"Reduced Poiseuille flow rate G_P(δ) (linearized BGK, diffuse walls); → δ/6 + σ_p in the slip limit."
+function gp_bgk(dl::Real)
+    dl < KIN_D[1] && return 0.35887 + 0.56410 * log(1 / dl)
+    dl > KIN_D[end] && return dl / 6 + 1.016191 + 1.0650 / dl - 2.1246 / dl^2
+    lw = log(dl)
+    j = clamp(searchsortedlast(LKD, lw), 1, length(LKD) - 1)
+    dx = LKD[j+1] - LKD[j]
+    t = (lw - LKD[j]) / dx
+    v = (2t^3 - 3t^2 + 1) * LKG[j] + (t^3 - 2t^2 + t) * dx * DKG[j] +
+        (-2t^3 + 3t^2) * LKG[j+1] + (t^3 - t^2) * dx * DKG[j+1]
+    return exp(v) / dl
+end
+
+"BGK flow rate over the first-order-slip flow rate, Q(δ)/(1 + 6σ_p/δ) ≥ 1; → 1 for thick films."
+kin_factor(h::Real, fl::Fluid) = (dl = h / fl.lam; 6 * gp_bgk(dl) / dl / (1 + 6 * fl.sig_p / dl))
+
+"Steady mobility with slip and (optionally) the BGK factor, used for the end conductances."
+G_steady(h::Real, fl::Fluid; kinetic::Bool=true) = real(G_mob(h, 0.0, fl; slip=true, wom=true, kinetic=kinetic))
 
 # ----------------------------------------------------------------------------- grid
 "Graded grid towards y = 0 with Simpson midpoints; returns nodes y, Simpson weights ws, control volumes V."
@@ -148,7 +219,7 @@ function film_impedance(y, V, h, H::AbstractMatrix, w::Real, fl::Fluid, cfg::Con
                         kap0::Real=Inf, kapL::Real=Inf, return_P::Bool=false)
     m = size(H, 1)
     K = length(y)
-    G = [G_mob(hh, w, fl; slip=cfg.slip, wom=cfg.wom) for hh in h]
+    G = [G_mob(hh, w, fl; slip=cfg.slip, wom=cfg.wom, kinetic=cfg.kinetic) for hh in h]
     f = cfg.exit ? [f_exit(hh, w, cfg) for hh in h] : ones(ComplexF64, K)
     c = (cfg.comp && w > 0) ? [12 * fl.eta * im * w * hh / (fl.npoly * fl.pa) for hh in h] : zeros(ComplexF64, K)
     l = ld(cfg)
@@ -202,6 +273,7 @@ Base.@kwdef struct Device
     heff::Float64 = 50e-9        # residual air gap at contact
     eps::Float64 = 2e-9          # regularization of the positive part
     ls::Float64 = 25e-9          # sealing width
+    seal_centred::Bool = false   # false: sealing starts at contact (tip vented at nominal contact); true: original law centred on contact
     nb::Int = 80                 # electrodes in parallel
     E::Float64 = 170e9
     Tf::Float64 = 25e-6
@@ -250,11 +322,12 @@ function gapfield(d::Device, phit, y, x1, x2, r)
     return h, H
 end
 
-"Tip-end conductance: sealing law (contact) in series with the tip pocket."
+"Tip-end conductance: contact sealing law in series with the tip pocket. Sealing starts at nominal contact and completes
+at an overlap of 2ls (seal_centred = true restores the law centred on contact, χ = 1/2 at nominal contact)."
 function tip_kappa(d::Device, x1, x2, r, I0, kpocket)
     tau = x2 - (1 - d.theta) * x1
     delta = r * tau - gcl(d)
-    chi_s = smoother((delta + d.ls) / (2d.ls))
+    chi_s = smoother(d.seal_centred ? (delta + d.ls) / (2 * d.ls) : delta / (2 * d.ls))
     kseal = chi_s <= 0 ? Inf : (chi_s >= 1 ? 0.0 : (1 - chi_s) / (chi_s * I0))
     (kseal == 0 || kpocket == 0) && return 0.0
     isinf(kseal) && return kpocket
@@ -263,11 +336,11 @@ function tip_kappa(d::Device, x1, x2, r, I0, kpocket)
 end
 
 "Pocket conductance calibrated so the tip end at rest has sealing fraction chi_rest (3-D check: 0.75)."
-function pocket_from_rest(d::Device, fl::Fluid; Np::Int=512, chi_rest::Float64=0.75)
+function pocket_from_rest(d::Device, fl::Fluid; Np::Int=512, chi_rest::Float64=0.75, kinetic::Bool=true)
     phit = phi_table(d)
     y, ws, V = grid(Np, d.heff / alpha(d), d.L)
     h, _ = gapfield(d, phit, y, 0.0, 0.0, 1)
-    I0 = sum(ws ./ (h .^ 2 .* (h .+ kp(fl))))
+    I0 = sum(ws ./ G_steady.(h, Ref(fl); kinetic=kinetic))
     return chi_rest < 1 ? (1 - chi_rest) / (chi_rest * I0) : 0.0
 end
 
@@ -279,7 +352,7 @@ function device_impedance(d::Device, fl::Fluid, cfg::Config, x1, x2, w, kpocket;
     fields = []
     for r in (1, -1)
         h, H = gapfield(d, phit, y, x1, x2, r)
-        I0 = sum(ws ./ (h .^ 2 .* (h .+ kp(fl))))
+        I0 = sum(ws ./ G_steady.(h, Ref(fl); kinetic=cfg.kinetic))
         k0 = tip_kappa(d, x1, x2, r, I0, kpocket)
         if return_fields
             Zr, Ps, kk = film_impedance(y, V, h, H, w, fl, cfg; kap0=k0, return_P=true)
@@ -340,31 +413,37 @@ function selftest()
     check("mobility, h = 1 μm, 1 kHz, no slip", G_mob(1e-6, 2π * 1e3, fl; slip=false),
           complex(9.999999983086157e-19, -4.091375926323227e-23))
     check("mobility, h = 5 μm, 300 kHz, slip", G_mob(5e-6, 2π * 3e5, fl),
-          complex(1.2261397856574372e-16, -3.975331877170366e-17))
+          complex(1.2319407624094012e-16, -4.0096701647538716e-17))
+    check("BGK flow rate, δ = 0.68 (table)", gp_bgk(0.68), 1.5620295501648154)
+    check("BGK flow rate, δ = 3e-4 (table)", gp_bgk(3e-4), 4.941766682114505)
+    check("BGK flow rate, δ = 150 (slip tail)", gp_bgk(150.0), 26.023196573333333)
+    check("kinetic factor, h = 51 nm", kin_factor(51e-9, fl), 1.3824988249729968)
     y, ws, V = grid(800, 20e-6, 400e-6)
     h = fill(0.3e-6, length(y))
     Zu = film_impedance(y, V, h, ones(1, length(y)), 2π * 5e4, fl, Config(faces=:one, exit=false))
-    check("uniform gap, one face, 50 kHz", Zu[1, 1], complex(0.004147517180803255, -0.0030798891626986594))
+    check("uniform gap, one face, 50 kHz", Zu[1, 1], complex(0.003963414055252005, -0.0025863083418439714))
     d = Device()
     cfg = Config()
+    check("exit factor, h = 10 μm, 2 kHz (off-node)", f_exit(10e-6, 2π * 2e3, cfg), complex(1.6630860440759023, 0.007319744271161413))
+    check("exit factor, h = 30 μm, 50 Hz (below band)", f_exit(30e-6, 2π * 50.0, cfg), complex(4.219635810452772, 0.008963189930125516))
+    check("exit factor, h = 5 μm, 200 kHz (above band)", f_exit(5e-6, 2π * 2e5, cfg), complex(1.3033931869186992, 0.04424849377169374))
     kq = pocket_from_rest(d, fl)
-    check("tip-pocket conductance", kq, 7.35124854117732e-12)
+    check("tip-pocket conductance", kq, 7.363676717037202e-12)
     M(a, b, c, e, f, g, i, j) = [complex(a, b) complex(c, e); complex(f, g) complex(i, j)]
     Z = device_impedance(d, fl, cfg, 0.0, 0.0, 0.0, kq)
-    check("device, rest, quasi-static", Z, M(4.079354614915459e-06, 0, 3.4796419238902166e-06, 0,
-          3.4796419238902154e-06, 0, 9.999189644220241e-06, 0))
+    check("device, rest, quasi-static", Z, M(4.074353435986358e-06, 0.0, 3.4744223824113605e-06, 0.0, 3.474422382411361e-06, 0.0, 9.98098995317206e-06, 0.0))
     Z = device_impedance(d, fl, cfg, 0.0, 0.0, 2π * 1e3, kq)
-    check("device, rest, 1 kHz", Z, M(4.101108280425428e-06, 1.5510232031831499e-07, 3.492371267034713e-06,
-          9.963966119847769e-08, 3.4923712670347164e-06, 9.963966119847775e-08, 1.0018394754110667e-05, 1.9547900074755584e-07))
+    check("device, rest, 1 kHz", Z, M(4.09532157111549e-06, 1.5495856279814438e-07, 3.486551183329197e-06, 9.928415690749089e-08, 3.4865511833291954e-06, 9.928415690749088e-08, 9.999083817469267e-06, 1.9424948942095587e-07))
+    Z = device_impedance(d, fl, cfg, 0.0, 0.0, 2π * 2e4, kq)
+    check("device, rest, 20 kHz (off-node)", Z, M(4.352965265027708e-06, 2.6860155799830123e-06, 3.6515463671379053e-06, 1.7422837515963682e-06, 3.651546367137907e-06, 1.7422837515963686e-06, 1.028716103934848e-05, 3.5042283161038e-06))
     Z = device_impedance(d, fl, cfg, gcl(d), gcl(d), 0.0, kq)
-    check("device, contact, quasi-static", Z, M(2.2769025269078227e-05, 0, 0.0001297644243724945, 0,
-          0.0001297644243724945, 0, 0.0034105606903015568, 0))
+    check("device, contact, quasi-static", Z, M(2.2480337164960124e-05, 0.0, 0.00012042028764719671, 0.0, 0.00012042028764719669, 0.0, 0.00271665899588216, 0.0))
     Z = device_impedance(d, fl, cfg, gcl(d), gcl(d), 2π * 1e5, kq)
-    check("device, contact, 100 kHz", Z, M(2.3025302069834133e-05, 1.2875063920648716e-05, 0.0001277517129643285,
-          -5.80299639217988e-06, 0.0001277517129643287, -5.802996392179888e-06, 0.0033272595072590264, -0.000493911662795534))
+    check("device, contact, 100 kHz", Z, M(2.409754579480602e-05, 1.3976131499144832e-05, 0.00012006571742329255, -1.9028536884916797e-06, 0.00012006571742329269, -1.9028536884916914e-06, 0.0026707190005156086, -0.00032752467863648066))
+    Z = device_impedance(Device(seal_centred=true), fl, cfg, gcl(d), gcl(d), 0.0, kq)
+    check("device, contact, centred sealing law", Z, M(2.2529155279676396e-05, 0.0, 0.00012485948436139068, 0.0, 0.0001248594843613907, 0.0, 0.0031286352030933714, 0.0))
     Z = device_impedance(d, fl, Config(exit=false), gcl(d), gcl(d), 0.0, Inf)
-    check("device, contact, original Reynolds model", Z, M(1.615251412363449e-05, 0, 0.00011851523462518454, 0,
-          0.00011851523462518462, 0, 0.003336466955055775, 0))
+    check("device, contact, original Reynolds model", Z, M(1.589424904839425e-05, 0.0, 0.00010941304010825427, 0.0, 0.00010941304010825434, 0.0, 0.0026473377327829355, 0.0))
     @printf("selftest: %d passed, %d failed\n", npass, nfail)
     return nfail == 0
 end
@@ -373,13 +452,14 @@ end
 function run_case_study()
     fl = Fluid(); d = Device(); cfg = Config(); kq = pocket_from_rest(d, fl); v = rigid(d)
     println("rigid-translation impedance of the comb (one open face), Z = c + iX")
-    @printf("  %-10s %12s %12s %12s %14s\n", "state", "c(0) N s/m", "c(1k)/c(0)", "X/c at 1k", "X/c at 100k")
+    @printf("  %-10s %12s %12s %14s %12s %14s\n", "state", "c(0) N s/m", "c(1k)/c(0)", "c(100k)/c(0)", "X/c at 1k", "X/c at 100k")
     for (name, gap) in (("rest", 13.76e-6), ("gap 5 um", 5e-6), ("gap 1 um", 1e-6), ("contact", 0.0))
         x1, x2 = state_at_gap(d, gap)
         z0 = real(zrt(device_impedance(d, fl, cfg, x1, x2, 0.0, kq), v))
         z1 = zrt(device_impedance(d, fl, cfg, x1, x2, 2π * 1e3, kq), v)
         z5 = zrt(device_impedance(d, fl, cfg, x1, x2, 2π * 1e5, kq), v)
-        @printf("  %-10s %12.4e %12.5f %12.5f %14.5f\n", name, z0, real(z1) / z0, imag(z1) / real(z1), imag(z5) / real(z5))
+        @printf("  %-10s %12.4e %12.5f %14.5f %12.5f %14.5f\n", name, z0, real(z1) / z0, real(z5) / z0,
+                imag(z1) / real(z1), imag(z5) / real(z5))
     end
     Dstar = d.nb * fl.eta * cfg.W / alpha(d)^3
     kap = π * kp(fl) / (2 * alpha(d) * ld(cfg))
@@ -394,7 +474,8 @@ const OI = (black=RGB(0, 0, 0), orange=RGB(230 / 255, 159 / 255, 0), sky=RGB(86 
 
 function setup_style()
     default(fontfamily="Computer Modern", framestyle=:box, grid=false, linewidth=1.6,
-            guidefontsize=10, tickfontsize=8, legendfontsize=8, titlefontsize=10, legend_background_color=:transparent)
+            guidefontsize=10, tickfontsize=8, legendfontsize=8, titlefontsize=10, legend_background_color=:transparent,
+            margin=4Plots.mm)
 end
 
 function plot_mobility(fl::Fluid=Fluid())
@@ -403,7 +484,7 @@ function plot_mobility(fl::Fluid=Fluid())
     p = plot(xscale=:log10, xlabel="Womersley parameter |λ| = (h/2)√(ω/ν)", ylabel="G(ω)/G(0)",
              title="Mobility with gas inertia and slip", legend=:bottomleft)
     for (bh, col) in ((0.0, OI.black), (0.05, OI.blue), (0.2, OI.vermillion))
-        flb = bh > 0 ? Fluid(lam=bh * h / 1.016) : fl
+        flb = bh > 0 ? Fluid(lam=bh * h / 1.016191) : fl
         w = (2 .* lam ./ h) .^ 2 .* nu(flb)
         r = [G_mob(h, wi, flb; slip=bh > 0) / G_mob(h, 0.0, flb; slip=bh > 0) for wi in w]
         plot!(p, lam, real.(r), color=col, label="Re, b/h = $(bh)")
@@ -414,7 +495,7 @@ end
 
 function plot_exit()
     hs = 10 .^ range(log10(0.1), log10(40), length=200)
-    p1 = plot(xscale=:log10, xlabel="gap h (μm)", ylabel="f₀(h)", title="Lateral exit factor (W = 25 μm)", legend=:topleft)
+    p1 = plot(xscale=:log10, xlabel="gap h (μm)", ylabel="f0(h)", title="Lateral exit factor (W = 25 μm)", legend=:topleft)
     for (faces, col) in ((:one, OI.blue), (:two, OI.vermillion))
         cfg = Config(faces=faces)
         plot!(p1, hs, [f0_exit(h * 1e-6, cfg) for h in hs], color=col, label=faces == :one ? "one open face (fit)" : "two open faces (fit)")
@@ -425,28 +506,35 @@ function plot_exit()
     two_f = [1.0253, 1.0514, 1.1059, 1.2243, 1.5007, 1.831, 2.219, 2.664, 3.170, 3.666, 4.407, 5.242, 6.179, 7.222, 8.381, 9.664, 11.083, 12.657]
     scatter!(p1, one_h, one_f, color=OI.blue, ms=3, label="Stokes, one face")
     scatter!(p1, two_h, two_f, color=OI.vermillion, ms=3, marker=:diamond, label="Stokes, two faces")
-    p2 = plot(xscale=:log10, yscale=:log10, xlabel="gap h (μm)", ylabel="|f/f₀ − 1|", title="Frequency dependence (one face)", legend=:topleft)
-    for (j, col, lab) in ((3, OI.green, "1 kHz"), (5, OI.orange, "10 kHz"))
+    p2 = plot(xscale=:log10, yscale=:log10, xlabel="gap h (μm)", ylabel="|f/f0 − 1|", title="Frequency dependence (one face)", legend=:topleft)
+    for (j, col, lab) in ((3, OI.green, "1 kHz"), (5, OI.orange, "10 kHz"), (7, OI.vermillion, "100 kHz"))
         plot!(p2, H_TAB, abs.(complex.(DF_RE[:, j], DF_IM[:, j])), color=col, marker=:circle, ms=3, label=lab)
     end
-    return plot(p1, p2, layout=(1, 2), size=(900, 360))
+    return plot(p1, p2, layout=(1, 2), size=(900, 360), left_margin=6Plots.mm, bottom_margin=6Plots.mm)
 end
 
 function plot_frequency(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
     kq = pocket_from_rest(d, fl); v = rigid(d)
     F = 10 .^ range(0, 5, length=41)
-    p1 = plot(xscale=:log10, xlabel="frequency (Hz)", ylabel="c(f)/c(0)", title="Damping", legend=:bottomleft)
+    p1 = plot(xscale=:log10, yscale=:log10, xlabel="frequency (Hz)", ylabel="|c(f)/c(0) − 1|",
+              title="Damping change (dashed: decrease, extrapolated < 100 Hz)", legend=:topleft, ylims=(1e-7, 1))
     p2 = plot(xscale=:log10, xlabel="frequency (Hz)", ylabel="Im Z / Re Z", title="Reactance (+ mass-like, − spring-like)", legend=:topleft)
     for (name, gap, col) in (("rest", 13.76e-6, OI.black), ("gap 5 μm", 5e-6, OI.blue), ("gap 1 μm", 1e-6, OI.green), ("contact", 0.0, OI.vermillion))
         x1, x2 = state_at_gap(d, gap)
         z0 = real(zrt(device_impedance(d, fl, cfg, x1, x2, 0.0, kq), v))
         zs = [zrt(device_impedance(d, fl, cfg, x1, x2, 2π * fh, kq), v) for fh in F]
-        plot!(p1, F, real.(zs) ./ z0, color=col, label=name)
+        dc = real.(zs) ./ z0 .- 1
+        plot!(p1, F, [x > 0 ? x : NaN for x in dc], color=col, label=name)
+        any(dc .< 0) && plot!(p1, F, [x < 0 ? -x : NaN for x in dc], color=col, ls=:dash, label="")
         plot!(p2, F, imag.(zs) ./ real.(zs), color=col, label=name)
     end
     vline!(p1, [1000], color=:gray, ls=:dot, label="1 kHz")
+    vline!(p1, [100], color=:gray, ls=:dashdot, label="100 Hz")
     vline!(p2, [1000], color=:gray, ls=:dot, label="")
-    return plot(p1, p2, layout=(1, 2), size=(900, 360))
+    Fa, Fb = F[F .<= 1e4], F[F .>= 3e3]           # reference slopes: Stokes layer at the exit, analytic expansion
+    plot!(p1, Fa, 5e-5 .* (Fa ./ 10) .^ 0.5, color=:gray, lw=0.8, label="slope 1/2")
+    plot!(p1, Fb, 3e-5 .* (Fb ./ 1e4) .^ 2, color=:gray, lw=0.8, ls=:dashdot, label="slope 2")
+    return plot(p1, p2, layout=(1, 2), size=(900, 360), left_margin=6Plots.mm, bottom_margin=6Plots.mm)
 end
 
 function plot_gap(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
@@ -484,8 +572,8 @@ function plot_contact(fl::Fluid=Fluid(), cfg::Config=Config())
     kap = π * kp(fl) / (2 * alpha(d0) * ld(cfg))
     p = plot(xscale=:log10, xlabel="residual gap h_min (nm)", ylabel="contact damping Re Z (mN s/m)",
              title="Contact limit", legend=:topright)
-    for (j, col, lab) in ((1, OI.blue, "quasi-static"), (2, OI.green, "10 kHz"), (3, OI.vermillion, "100 kHz"))
-        plot!(p, hmin, 1e3 .* real.(getindex.(res, j)), color=col, label=lab)
+    for (j, col, lab, sty) in ((1, OI.blue, "quasi-static", :solid), (2, OI.green, "10 kHz", :dash), (3, OI.vermillion, "100 kHz", :solid))
+        plot!(p, hmin, 1e3 .* real.(getindex.(res, j)), color=col, ls=sty, label=lab)
     end
     hline!(p, [1e3 * Dstar * phi_sat(kap)], color=OI.black, ls=:dash, label="saturated limit D⋆Φsat(κ)")
     return p
@@ -497,14 +585,14 @@ function plot_pressure(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config
     for (name, gap, ymax) in (("contact", 0.0, 40e-6), ("rest", 13.76e-6, 400e-6))
         x1, x2 = state_at_gap(d, gap)
         _, fields = device_impedance(d, fl, cfg, x1, x2, w, kq; return_fields=true)
-        y, zeta, p = pressure_field(fields[1], cfg, v)
+        y, zeta, p = pressure_field(fields[1], cfg, v; nz=201)
         keep = y .<= ymax
         hm = heatmap(1e6 .* y[keep], 1e6 .* zeta, transpose(real.(p[keep, :])), color=:viridis,
                      xlabel="y (μm)", ylabel="ζ (μm)  (ζ = W open)", title="Re p per unit closing speed, $(name)",
                      colorbar_title="Pa s/m")
         push!(plots_, hm)
     end
-    return plot(plots_..., layout=(1, 2), size=(950, 360))
+    return plot(plots_..., layout=(1, 2), size=(950, 360), left_margin=6Plots.mm, bottom_margin=6Plots.mm)
 end
 
 function make_plots(outdir::AbstractString="figs")

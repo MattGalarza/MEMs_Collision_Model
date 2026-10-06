@@ -1,1 +1,7 @@
-
+Device - B10
+T1: 3V at 100Hz
+T2: 3V at 150Hz
+T3: 2V at 100Hz
+T4: 2V at 150Hz
+T5: 1V at 100Hz
+T6: 1V at 150Hz

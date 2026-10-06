@@ -125,6 +125,32 @@ const ARG_DF = angle.(complex.(DF_RE, DF_IM))          # continuous over the tab
 const D_LA = pchip_slopes(LOG_W, LOG_ABS_DF)
 const D_PH = pchip_slopes(LOG_W, ARG_DF)
 
+# the same for TWO open faces (cells with the device layer symmetric about its mid-plane; same gaps and frequencies)
+const DF2_RE = [
+    5.194200847213892e-09 9.38320177112928e-09 2.125398168573156e-08 7.28872135979941e-08 5.320932772168163e-07 3.5800958475551425e-06 1.8116484451491388e-05
+    8.948479668369202e-08 1.578109933841887e-07 3.2127889793009956e-07 8.441542942438929e-07 4.7151545945478546e-06 2.908574366133898e-05 0.00014392382249428515
+    1.3682706179185544e-06 2.3915590212642e-06 4.632238136847988e-06 1.0329275158760254e-05 4.4179492744600424e-05 0.00024029874802788953 0.0011603733542888683
+    1.822864367873045e-05 3.17446829332102e-05 6.0139498614164566e-05 0.00012300684010035923 0.0004291101395894614 0.0020251386310452535 0.009699264040461175
+    0.0001962008228715284 0.0003413572938490983 0.000642202594707042 0.0012721707001277505 0.004000433864122632 0.016802435646541936 0.07837845629451712
+    0.0010370326793915918 0.001806071293123157 0.0034074125445431314 0.006777746921763805 0.020904626770354318 0.07918718193035446 0.2575571344287444
+    0.0023607829503646816 0.0041136777601114005 0.007757042273612846 0.015265316150101738 0.044587509021164706 0.1470501928552157 0.26899768782966027
+    0.005539169759354756 0.009666669035275799 0.018255978674144524 0.03549863799037256 0.09324488125996866 0.2024060047434355 0.11107801672015172
+    0.010227955983772574 0.017883503798902245 0.03381826819089517 0.06440146887108145 0.13933580085345998 0.14139513329181352 -0.0774430530872946]
+const DF2_IM = [
+    2.2658304703743533e-07 6.738513883654653e-07 2.2325764409021173e-06 6.675122411096662e-06 2.2134332402046252e-05 6.497531171465839e-05 0.00020282670294215175
+    1.5356782158240231e-06 4.497288984158307e-06 1.4757714552001688e-05 4.38994246748213e-05 0.0001449960027166423 0.0004229510152095991 0.001301767011702222
+    1.013326668806818e-05 2.8721217253778222e-05 9.216883965839367e-05 0.00027089608552531504 0.000886735770350801 0.0025556074999033424 0.007683178587911727
+    6.489571290118013e-05 0.00017230363558315344 0.0005267726676038446 0.0015060818652694466 0.004826750313604147 0.013549665579451952 0.038783894873441055
+    0.0003951257586097278 0.0009443264836266707 0.0026350775445153317 0.007104419878622172 0.021640616463783034 0.0566121765703413 0.1356273820742361
+    0.0015249156554319003 0.0032999244760524805 0.008282108448878651 0.020554480166799626 0.056966202461020445 0.12376388532105237 0.13918176042068284
+    0.0029564355031239348 0.00596486492226665 0.013676825039259807 0.03116126701348497 0.07711542958469847 0.12426905948488967 0.001408234289127941
+    0.005976146266773338 0.011103134828167473 0.02235341975125629 0.04334235564850303 0.0780709567705293 0.019542876668365575 -0.14462411328648458
+    0.009977808540296323 0.01730431983288824 0.03037820517711916 0.045995641625171224 0.02874789999724247 -0.12886729033250122 -0.19755826430575496]
+const LOG_ABS_DF2 = log.(abs.(complex.(DF2_RE, DF2_IM)))
+const ARG_DF2 = angle.(complex.(DF2_RE, DF2_IM))
+const D_LA2 = pchip_slopes(LOG_W, LOG_ABS_DF2)
+const D_PH2 = pchip_slopes(LOG_W, ARG_DF2)
+
 "Cubic Hermite in log ω along table row i. Below the band: log|Δf| extended linearly (power law of the first interval,
 Δf → 0) with the phase held. Above it: Δf held, since cell and strip both turn inertial and their ratio saturates;
 this keeps Re(G/f) > 0 (passivity) up to 2.8 MHz for the case study."
@@ -146,16 +172,17 @@ function f0_exit(h::Real, cfg::Config)
     return (1 + 2 * (c0 + c1 * X / (X + x0)) * X)^3
 end
 
-"Lateral exit factor f(h, ω) = f0(h)[1 + Δf(h, ω)]; h clamped to the table range (one open face only)."
+"Lateral exit factor f(h, ω) = f0(h)[1 + Δf(h, ω)], one or two open faces; h clamped to the table range."
 function f_exit(h::Real, w::Real, cfg::Config)
     f0 = f0_exit(h, cfg)
-    (w == 0 || cfg.faces != :one || !cfg.exit_omega) && return complex(f0)
+    (w == 0 || !cfg.exit_omega) && return complex(f0)
+    LA, DLA, PH, DPH = cfg.faces == :one ? (LOG_ABS_DF, D_LA, ARG_DF, D_PH) : (LOG_ABS_DF2, D_LA2, ARG_DF2, D_PH2)
     lh = log(clamp(h * 1e6, H_TAB[1], H_TAB[end]))
     i = clamp(searchsortedlast(LOG_H, lh), 1, length(LOG_H) - 1)
     th = (lh - LOG_H[i]) / (LOG_H[i+1] - LOG_H[i])
     lw = log(Float64(w))
-    la = (1 - th) * along_w(LOG_ABS_DF, D_LA, i, lw, false) + th * along_w(LOG_ABS_DF, D_LA, i + 1, lw, false)
-    ph = (1 - th) * along_w(ARG_DF, D_PH, i, lw, true) + th * along_w(ARG_DF, D_PH, i + 1, lw, true)
+    la = (1 - th) * along_w(LA, DLA, i, lw, false) + th * along_w(LA, DLA, i + 1, lw, false)
+    ph = (1 - th) * along_w(PH, DPH, i, lw, true) + th * along_w(PH, DPH, i + 1, lw, true)
     return f0 * (1 + exp(la + im * ph))
 end
 
@@ -345,6 +372,10 @@ function pocket_from_rest(d::Device, fl::Fluid; Np::Int=512, chi_rest::Float64=0
 end
 
 "2×2 impedance of the whole comb (both gaps of every electrode) at state (x1, x2) and frequency w."
+"Tip-pocket conductance: 3-D calibrated for one open face; doubled when both faces vent the pocket (an estimate,
+no 3-D calibration exists for two faces; at rest the factor changes the damping by 0.3%)."
+pocket_for(d::Device, fl::Fluid, cfg::Config) = pocket_from_rest(d, fl; kinetic=cfg.kinetic) * (cfg.faces == :two ? 2.0 : 1.0)
+
 function device_impedance(d::Device, fl::Fluid, cfg::Config, x1, x2, w, kpocket;
                           Np::Int=512, return_fields::Bool=false, phit=phi_table(d))
     y, ws, V = grid(Np, d.heff / alpha(d), d.L)
@@ -444,14 +475,22 @@ function selftest()
     check("device, contact, centred sealing law", Z, M(2.2529155279676396e-05, 0.0, 0.00012485948436139068, 0.0, 0.0001248594843613907, 0.0, 0.0031286352030933714, 0.0))
     Z = device_impedance(d, fl, Config(exit=false), gcl(d), gcl(d), 0.0, Inf)
     check("device, contact, original Reynolds model", Z, M(1.589424904839425e-05, 0.0, 0.00010941304010825427, 0.0, 0.00010941304010825434, 0.0, 0.0026473377327829355, 0.0))
+    c2 = Config(faces=:two)
+    check("exit factor, two faces, h = 10 μm, 2 kHz", f_exit(10e-6, 2π * 2e3, c2), complex(2.6681111804714766, 0.020554019532760776))
+    kq2 = pocket_for(d, fl, c2)
+    check("tip pocket, two faces (doubled)", kq2, 1.4727353434074404e-11)
+    Z = device_impedance(d, fl, c2, 0.0, 0.0, 2π * 1e3, kq2)
+    check("device, two faces, rest, 1 kHz", Z, M(2.611543189311072e-06, 1.2813926985160897e-07, 1.954384327930891e-06, 7.338781538153949e-08, 1.954384327930892e-06, 7.338781538153949e-08, 5.179018672612699e-06, 1.3105968152557517e-07))
+    Z = device_impedance(d, fl, c2, gcl(d), gcl(d), 0.0, kq2)
+    check("device, two faces, contact, quasi-static", Z, M(9.032623939079388e-06, 0.0, 4.889543534621846e-05, 0.0, 4.8895435346218465e-05, 0.0, 0.0015428252356469215, 0.0))
     @printf("selftest: %d passed, %d failed\n", npass, nfail)
     return nfail == 0
 end
 
 # ----------------------------------------------------------------------------- case-study summary
-function run_case_study()
-    fl = Fluid(); d = Device(); cfg = Config(); kq = pocket_from_rest(d, fl); v = rigid(d)
-    println("rigid-translation impedance of the comb (one open face), Z = c + iX")
+function run_case_study(; faces::Symbol=:one)
+    fl = Fluid(); d = Device(); cfg = Config(faces=faces); kq = pocket_for(d, fl, cfg); v = rigid(d)
+    println("rigid-translation impedance of the comb (", faces == :one ? "one open face" : "two open faces", "), Z = c + iX")
     @printf("  %-10s %12s %12s %14s %12s %14s\n", "state", "c(0) N s/m", "c(1k)/c(0)", "c(100k)/c(0)", "X/c at 1k", "X/c at 100k")
     for (name, gap) in (("rest", 13.76e-6), ("gap 5 um", 5e-6), ("gap 1 um", 1e-6), ("contact", 0.0))
         x1, x2 = state_at_gap(d, gap)
@@ -493,7 +532,7 @@ function plot_mobility(fl::Fluid=Fluid())
     return p
 end
 
-function plot_exit()
+function plot_exit(cfg::Config=Config())
     hs = 10 .^ range(log10(0.1), log10(40), length=200)
     p1 = plot(xscale=:log10, xlabel="gap h (μm)", ylabel="f0(h)", title="Lateral exit factor (W = 25 μm)", legend=:topleft)
     for (faces, col) in ((:one, OI.blue), (:two, OI.vermillion))
@@ -506,15 +545,17 @@ function plot_exit()
     two_f = [1.0253, 1.0514, 1.1059, 1.2243, 1.5007, 1.831, 2.219, 2.664, 3.170, 3.666, 4.407, 5.242, 6.179, 7.222, 8.381, 9.664, 11.083, 12.657]
     scatter!(p1, one_h, one_f, color=OI.blue, ms=3, label="Stokes, one face")
     scatter!(p1, two_h, two_f, color=OI.vermillion, ms=3, marker=:diamond, label="Stokes, two faces")
-    p2 = plot(xscale=:log10, yscale=:log10, xlabel="gap h (μm)", ylabel="|f/f0 − 1|", title="Frequency dependence (one face)", legend=:topleft)
+    RE, IM = cfg.faces == :one ? (DF_RE, DF_IM) : (DF2_RE, DF2_IM)
+    p2 = plot(xscale=:log10, yscale=:log10, xlabel="gap h (μm)", ylabel="|f/f0 − 1|",
+              title=cfg.faces == :one ? "Frequency dependence (one face)" : "Frequency dependence (two faces)", legend=:topleft)
     for (j, col, lab) in ((3, OI.green, "1 kHz"), (5, OI.orange, "10 kHz"), (7, OI.vermillion, "100 kHz"))
-        plot!(p2, H_TAB, abs.(complex.(DF_RE[:, j], DF_IM[:, j])), color=col, marker=:circle, ms=3, label=lab)
+        plot!(p2, H_TAB, abs.(complex.(RE[:, j], IM[:, j])), color=col, marker=:circle, ms=3, label=lab)
     end
     return plot(p1, p2, layout=(1, 2), size=(900, 360), left_margin=6Plots.mm, bottom_margin=6Plots.mm)
 end
 
 function plot_frequency(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
-    kq = pocket_from_rest(d, fl); v = rigid(d)
+    kq = pocket_for(d, fl, cfg); v = rigid(d)
     F = 10 .^ range(0, 5, length=41)
     p1 = plot(xscale=:log10, yscale=:log10, xlabel="frequency (Hz)", ylabel="|c(f)/c(0) − 1|",
               title="Damping change (dashed: decrease, extrapolated < 100 Hz)", legend=:topleft, ylims=(1e-7, 1))
@@ -538,7 +579,7 @@ function plot_frequency(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Confi
 end
 
 function plot_gap(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
-    kq = pocket_from_rest(d, fl); v = rigid(d)
+    kq = pocket_for(d, fl, cfg); v = rigid(d)
     gaps = 10 .^ range(log10(0.051), log10(13.76), length=28)
     rows = map(gaps) do g
         x1, x2 = state_at_gap(d, g * 1e-6)
@@ -549,7 +590,7 @@ function plot_gap(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
         (o, c0, c10, c100)
     end
     p = plot(xscale=:log10, yscale=:log10, xlabel="tip gap (μm)", ylabel="damping Re Z (mN s/m)",
-             title="Damping across the stroke", legend=:topright)
+             title="Damping across the stroke" * facetag(cfg), legend=:topright)
     plot!(p, gaps, 1e3 .* getindex.(rows, 1), color=OI.black, ls=:dash, label="Reynolds, quasi-static (original)")
     plot!(p, gaps, 1e3 .* getindex.(rows, 2), color=OI.blue, label="full model, quasi-static")
     plot!(p, gaps, 1e3 .* getindex.(rows, 3), color=OI.green, ls=:dot, label="full model, 10 kHz")
@@ -558,12 +599,12 @@ function plot_gap(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
 end
 
 Config(c::Config; kw...) = Config(; W=c.W, faces=c.faces, slip=c.slip, wom=c.wom, comp=c.comp, exit=c.exit,
-                                   exit_omega=c.exit_omega, N=c.N, M=c.M, kw...)
+                                   exit_omega=c.exit_omega, N=c.N, M=c.M, kinetic=c.kinetic, kw...)
 
 function plot_contact(fl::Fluid=Fluid(), cfg::Config=Config())
     he = 10 .^ range(log10(0.5e-9), log10(1e-6), length=20)
     res = map(he) do h_
-        d = Device(heff=h_); kq = pocket_from_rest(d, fl); v = rigid(d)
+        d = Device(heff=h_); kq = pocket_for(d, fl, cfg); v = rigid(d)
         [zrt(device_impedance(d, fl, cfg, gcl(d), gcl(d), 2π * fh, kq), v) for fh in (0.0, 1e4, 1e5)]
     end
     hmin = (he .+ 1e-9) .* 1e9
@@ -571,16 +612,16 @@ function plot_contact(fl::Fluid=Fluid(), cfg::Config=Config())
     Dstar = d0.nb * fl.eta * cfg.W / alpha(d0)^3
     kap = π * kp(fl) / (2 * alpha(d0) * ld(cfg))
     p = plot(xscale=:log10, xlabel="residual gap h_min (nm)", ylabel="contact damping Re Z (mN s/m)",
-             title="Contact limit", legend=:topright)
+             title="Contact limit" * facetag(cfg), legend=:topright)
     for (j, col, lab, sty) in ((1, OI.blue, "quasi-static", :solid), (2, OI.green, "10 kHz", :dash), (3, OI.vermillion, "100 kHz", :solid))
         plot!(p, hmin, 1e3 .* real.(getindex.(res, j)), color=col, ls=sty, label=lab)
     end
-    hline!(p, [1e3 * Dstar * phi_sat(kap)], color=OI.black, ls=:dash, label="saturated limit D⋆Φsat(κ)")
+    hline!(p, [1e3 * Dstar * phi_sat(kap)], color=OI.black, ls=:dash, label="first-order-slip limit D⋆Φsat(κ)")
     return p
 end
 
 function plot_pressure(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config(); w::Real=0.0)
-    kq = pocket_from_rest(d, fl); v = rigid(d)
+    kq = pocket_for(d, fl, cfg); v = rigid(d)
     plots_ = []
     for (name, gap, ymax) in (("contact", 0.0, 40e-6), ("rest", 13.76e-6, 400e-6))
         x1, x2 = state_at_gap(d, gap)
@@ -588,27 +629,263 @@ function plot_pressure(d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config
         y, zeta, p = pressure_field(fields[1], cfg, v; nz=201)
         keep = y .<= ymax
         hm = heatmap(1e6 .* y[keep], 1e6 .* zeta, transpose(real.(p[keep, :])), color=:viridis,
-                     xlabel="y (μm)", ylabel="ζ (μm)  (ζ = W open)", title="Re p per unit closing speed, $(name)",
+                     xlabel="y (μm)", ylabel=zlabel(cfg), title="Re p per unit closing speed, $(name)",
                      colorbar_title="Pa s/m")
         push!(plots_, hm)
     end
     return plot(plots_..., layout=(1, 2), size=(950, 360), left_margin=6Plots.mm, bottom_margin=6Plots.mm)
 end
 
-function make_plots(outdir::AbstractString="figs")
+# ----------------------------------------------------------------------------- flow-field visualizations
+facetag(cfg::Config) = cfg.faces == :one ? "" : " (two open faces)"
+zlabel(cfg::Config) = cfg.faces == :one ? "ζ (μm), open at top" : "ζ (μm), both faces open"
+
+"Film pressure, depth-averaged gas flux and dissipation density of the closing film, per unit closing speed."
+function film_flow(gap::Real; d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config(), nz::Int=81)
+    kq = pocket_for(d, fl, cfg)
+    v = rigid(d)
+    x1, x2 = state_at_gap(d, gap)
+    Z, fields = device_impedance(d, fl, cfg, x1, x2, 0.0, kq; return_fields=true)
+    F = fields[1]
+    y, zeta, pc = pressure_field(F, cfg, v; nz=nz)
+    p = real.(pc)
+    p .*= sign(p[argmax(abs.(p))])
+    G = [real(G_mob(hh, 0.0, fl; kinetic=cfg.kinetic)) for hh in F.h]
+    f = [real(f_exit(hh, 0.0, cfg)) for hh in F.h]
+    ny = length(y)
+    py = zeros(ny, nz)
+    pz = zeros(ny, nz)
+    for i in 1:ny
+        i1, i2 = max(i - 1, 1), min(i + 1, ny)
+        py[i, :] = (p[i2, :] .- p[i1, :]) ./ (y[i2] - y[i1])
+    end
+    for j in 1:nz
+        j1, j2 = max(j - 1, 1), min(j + 1, nz)
+        pz[:, j] = (p[:, j2] .- p[:, j1]) ./ (zeta[j2] - zeta[j1])
+    end
+    a = G ./ (12 * fl.eta)
+    b = G ./ f ./ (12 * fl.eta)
+    return (y=y, zeta=zeta, p=p, qy=-a .* py, qz=-b .* pz, e=a .* py .^ 2 .+ b .* pz .^ 2, c=real(zrt(Z, v)))
+end
+
+"Distances from the tip within which the given fractions of the film dissipation occur."
+function dissipation_quantiles(F, fr)
+    dz = F.zeta[2] - F.zeta[1]
+    Ey = vec(sum(F.e, dims=2)) .* dz
+    E = zeros(length(F.y))
+    for i in 2:length(F.y)
+        E[i] = E[i-1] + 0.5 * (Ey[i] + Ey[i-1]) * (F.y[i] - F.y[i-1])
+    end
+    E ./= E[end]
+    return [F.y[min(searchsortedfirst(E, q), length(E))] for q in fr]
+end
+
+"Pressure with flux arrows, and dissipation density, at nominal contact and at rest."
+function plot_film_flow(; d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
+    panels = Any[]
+    for (name, gap, ymax) in (("nominal contact", 0.0, 60e-6), ("rest", 13.76e-6, 400e-6))
+        F = film_flow(gap; d=d, fl=fl, cfg=cfg)
+        keep = F.y .<= ymax
+        yk = 1e6 .* F.y[keep]
+        zk = 1e6 .* F.zeta
+        P = F.p[keep, :]
+        pm = maximum(P)
+        h1 = heatmap(yk, zk, transpose(P ./ pm), color=:viridis, clims=(0, 1), legend=false,
+                     xlabel="y from the tip (μm)", ylabel=zlabel(cfg), title="pressure / peak and gas flux, $(name)",
+                     colorbar_title=@sprintf("p/pmax, pmax = %.3g Pa per m/s", pm), titlefontsize=9)
+        Ly, Lz = 1e6 * ymax, 1e6 * cfg.W
+        iy = unique([min(searchsortedfirst(yk, t), length(yk)) for t in range(0.04 * Ly, 0.96 * Ly, length=14)])
+        iz = round.(Int, range(3, length(zk) - 2, length=8))
+        QY = F.qy[keep, :]
+        QZ = F.qz[keep, :]
+        xs, zs, us, ws = Float64[], Float64[], Float64[], Float64[]
+        for i in iy, j in iz
+            u, w = QY[i, j] / Ly, QZ[i, j] / Lz
+            m = hypot(u, w)
+            m > 0 || continue
+            push!(xs, yk[i]); push!(zs, zk[j]); push!(us, 0.045 * Ly * u / m); push!(ws, 0.045 * Lz * w / m)
+        end
+        quiver!(h1, xs, zs, quiver=(us, ws), color=:white, lw=0.8, label="")
+        E = F.e[keep, :]
+        L = log10.(max.(E ./ maximum(E), 1e-6))
+        y50, y90 = 1e6 .* dissipation_quantiles(F, (0.5, 0.9))
+        h2 = heatmap(yk, zk, transpose(L), color=:magma, clims=(-4, 0), legend=false, xlabel="y from the tip (μm)",
+                     title=@sprintf("dissipation, %s: half within %.3g μm, 90%% within %.3g μm", name, y50, y90),
+                     colorbar_title="log10 of dissipation / max", titlefontsize=9)
+        for (yy, st) in ((y50, :dash), (y90, :dot))
+            yy < Ly && vline!(h2, [yy], color=:white, ls=st, label="")
+        end
+        push!(panels, h1, h2)
+    end
+    return plot(panels..., layout=(2, 2), size=(1050, 640), left_margin=5Plots.mm, bottom_margin=5Plots.mm)
+end
+
+"Rigid-translation damping across the stroke: full model and with each ingredient removed (columns:
+gap, full, ideal tip vent, no exit factor and ideal vent, first-order slip, full at 100 kHz)."
+function stroke_table(; d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config(), n::Int=25)
+    kq = pocket_for(d, fl, cfg)
+    kqs = pocket_for(d, fl, Config(cfg; kinetic=false))
+    v = rigid(d)
+    gaps = 10 .^ range(log10(0.0515e-6), log10(13.76e-6), length=n)
+    T = zeros(n, 6)
+    for (i, g) in enumerate(gaps)
+        x1, x2 = state_at_gap(d, i == 1 ? 0.0 : g)
+        cz(cf, k, w) = real(zrt(device_impedance(d, fl, cf, x1, x2, w, k), v))
+        T[i, :] = [g, cz(cfg, kq, 0.0), cz(cfg, Inf, 0.0), cz(Config(cfg; exit=false), Inf, 0.0),
+                   cz(Config(cfg; kinetic=false), kqs, 0.0), cz(cfg, kq, 2π * 1e5)]
+    end
+    return T
+end
+
+"What each ingredient does to the damping across the stroke."
+function plot_correction_budget(; d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
+    T = stroke_table(d=d, fl=fl, cfg=cfg)
+    g = 1e6 .* T[:, 1]
+    p1 = plot(g, T[:, 3] ./ T[:, 4], xscale=:log10, color=OI.blue, lw=2, label="exit factor (Stokes cells)",
+              xlabel="tip gap (μm), contact at 0.051", ylabel="damping ratio (with / without)",
+              title="Large corrections" * facetag(cfg), legend=:topleft)
+    plot!(p1, g, T[:, 2] ./ T[:, 3], color=OI.green, lw=2, label="tip pocket (3-D calibrated)")
+    plot!(p1, g, T[:, 6] ./ T[:, 2], color=OI.vermillion, lw=2, ls=:dash, label="100 kHz vs quasi-static")
+    hline!(p1, [1.0], color=:gray, lw=0.6, label="")
+    p2 = plot(g, T[:, 2] ./ T[:, 5], xscale=:log10, color=OI.purple, lw=2, label="kinetic (BGK) vs first-order slip",
+              xlabel="tip gap (μm), contact at 0.051", title="Rarefaction", ylims=(0.92, 1.01), legend=:topleft)
+    hline!(p2, [1.0], color=:gray, lw=0.6, label="")
+    return plot(p1, p2, layout=(1, 2), size=(1000, 380), left_margin=5Plots.mm, bottom_margin=5Plots.mm)
+end
+
+"Contact damping against residual gap (nm) for the four combinations of rarefaction model and sealing law."
+function contact_table(; fl::Fluid=Fluid(), cfg::Config=Config(), n::Int=26)
+    he = 10 .^ range(log10(0.5e-9), log10(1e-6), length=n)
+    T = zeros(n, 5)
+    for (i, h_) in enumerate(he)
+        dv = Device(heff=h_)
+        dc = Device(heff=h_, seal_centred=true)
+        k1 = pocket_for(dv, fl, cfg)
+        k0 = pocket_for(dv, fl, Config(cfg; kinetic=false))
+        v = rigid(dv)
+        zc(dd, cf, k) = 1e3 * real(zrt(device_impedance(dd, fl, cf, gcl(dd), gcl(dd), 0.0, k), v))
+        T[i, :] = [1e9 * (h_ + dv.eps / 2), zc(dv, cfg, k1), zc(dv, Config(cfg; kinetic=false), k0),
+                   zc(dc, cfg, k1), zc(dc, Config(cfg; kinetic=false), k0)]
+    end
+    return T
+end
+
+"Contact damping: kinetic factor against first-order slip, vented tip against the centred sealing law."
+function plot_contact_comparison(; d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config())
+    T = contact_table(fl=fl, cfg=cfg)
+    Dstar = d.nb * fl.eta * cfg.W / alpha(d)^3
+    kap = π * kp(fl) / (2 * alpha(d) * ld(cfg))
+    sat = 1e3 * Dstar * phi_sat(kap)
+    p = plot(T[:, 1], T[:, 2], xscale=:log10, color=OI.blue, lw=2.2, label="kinetic (BGK), tip vented [model]",
+             xlabel="residual gap h_min (nm)", ylabel="contact damping (mN s/m)",
+             title="Contact damping: rarefaction and tip end condition" * facetag(cfg), legend=:topright, size=(760, 440))
+    plot!(p, T[:, 1], T[:, 3], color=OI.purple, lw=1.6, label="first-order slip, tip vented")
+    plot!(p, T[:, 1], T[:, 4], color=OI.blue, lw=1.2, ls=:dash, label="kinetic, sealing law centred on contact")
+    plot!(p, T[:, 1], T[:, 5], color=OI.purple, lw=1.2, ls=:dash, label="first-order slip, centred sealing")
+    hline!(p, [sat], color=:black, ls=:dot, label=@sprintf("first-order-slip limit %.2f mN s/m", sat))
+    vline!(p, [51.0], color=:gray, lw=0.7, label="device, 51 nm")
+    return p
+end
+
+"Linearized-BGK Poiseuille flow rate and the kinetic flow factor."
+function plot_kinetic(; fl::Fluid=Fluid())
+    dd = 10 .^ range(-4, 3, length=400)
+    GP = gp_bgk.(dd)
+    p1 = plot(dd, GP, xscale=:log10, yscale=:log10, color=OI.blue, lw=2, label="linearized BGK",
+              xlabel="δ (gap / free path)", ylabel="reduced flow rate G_P", ylims=(1, 300), legend=:topleft,
+              title="Plane Poiseuille flow of a rarefied gas")
+    plot!(p1, dd, dd ./ 6 .+ fl.sig_p, color=:black, ls=:dash, label="first-order slip, δ/6 + σp")
+    sm = dd .< 0.3
+    plot!(p1, dd[sm], 0.35887 .+ log.(1 ./ dd[sm]) ./ sqrt(π), color=OI.orange, ls=:dashdot, label="free molecular")
+    i = argmin(GP)
+    scatter!(p1, [dd[i]], [GP[i]], color=OI.vermillion, ms=4, label="Knudsen minimum")
+    p2 = plot(dd, 6 .* GP ./ (dd .+ 6 * fl.sig_p), xscale=:log10, color=OI.purple, lw=2, ylims=(0.9, 2.7), label="",
+              xlabel="δ (gap / free path)", ylabel="R = BGK / first-order slip flow", title="Kinetic flow factor")
+    hline!(p2, [1.0], color=:gray, lw=0.6, label="")
+    vline!(p2, [51e-9, 1e-6, 13.76e-6] ./ fl.lam, color=:gray, ls=:dot, label="contact, 1 μm, rest")
+    return plot(p1, p2, layout=(1, 2), size=(1000, 380), left_margin=5Plots.mm, bottom_margin=5Plots.mm)
+end
+
+"Animation: oscillatory channel-flow (Womersley) profiles across the gap over one cycle."
+function animate_womersley(outfile::AbstractString; lams=(0.5, 2.0, 6.0), nframes::Int=36, fps::Int=12)
+    zs = collect(range(-0.5, 0.5, length=201))
+    prof = [2 .* (1 .- cosh.(2 * L * cis(π / 4) .* zs) ./ cosh(L * cis(π / 4))) ./ (L * cis(π / 4))^2 for L in lams]
+    anim = @animate for i in 0:nframes-1
+        ph = 2π * i / nframes
+        ps = Any[]
+        for (k, (L, u)) in enumerate(zip(lams, prof))
+            env = abs.(u)
+            ttl = @sprintf("|λ| = %g%s", L, L < 1 ? ", quasi-steady" : ", inertial")
+            k == 1 && (ttl *= @sprintf("   (phase %.0f deg)", rad2deg(ph)))
+            p = plot(Shape(vcat(-env, reverse(env)), vcat(zs, reverse(zs))), fillcolor=:gray90, linecolor=:gray90,
+                     label="", xlims=(-1.05, 1.05), ylims=(-0.5, 0.5), xlabel="u / u_Poiseuille",
+                     ylabel=(k == 1 ? "z/h across the gap" : ""), title=ttl, titlefontsize=9)
+            plot!(p, 1 .- 4 .* zs .^ 2, zs, color=:gray, ls=:dot, label="")
+            plot!(p, real.(u .* cis(ph)), zs, color=OI.blue, lw=2, label="")
+            dl = 1 / (sqrt(2) * L)
+            dl < 0.5 && hline!(p, [0.5 - dl, dl - 0.5], color=OI.orange, ls=:dash, label="")
+            push!(ps, p)
+        end
+        plot(ps..., layout=(1, 3), size=(1000, 360), left_margin=4Plots.mm, bottom_margin=5Plots.mm)
+    end
+    gif(anim, outfile, fps=fps)
+end
+
+"Animation: film pressure as the electrode closes from rest to contact, with the damping curve."
+function animate_closing(outfile::AbstractString; d::Device=Device(), fl::Fluid=Fluid(), cfg::Config=Config(),
+                         nframes::Int=34, fps::Int=6)
+    gaps = vcat(collect(10 .^ range(log10(13.76e-6), log10(0.0515e-6), length=nframes)), zeros(6))
+    T = stroke_table(d=d, fl=fl, cfg=cfg)
+    ticks = (collect(-1.0:1.0:2.0), ["0.1", "1", "10", "100"])
+    anim = @animate for g in gaps
+        F = film_flow(g; d=d, fl=fl, cfg=cfg, nz=61)
+        ly = log10.(1e6 .* F.y[2:end])
+        P = F.p[2:end, :]
+        pm = maximum(P)
+        lab = g == 0 ? "contact (51 nm)" : @sprintf("%.3g μm", 1e6 * g)
+        h1 = heatmap(ly, 1e6 .* F.zeta, transpose(P ./ pm), color=:viridis, clims=(0, 1), legend=false,
+                     xlims=(log10(0.05), log10(400.0)), xticks=ticks, xlabel="y from the tip (μm)",
+                     ylabel=zlabel(cfg), titlefontsize=9,
+                     title=@sprintf("film pressure / peak, tip gap %s, peak %.3g Pa per m/s", lab, pm))
+        h2 = plot(1e6 .* T[:, 1], 1e3 .* T[:, 2], xscale=:log10, yscale=:log10, color=OI.blue, lw=1.6, label="",
+                  xlabel="tip gap (μm)", ylabel="damping (mN s/m)", title="rigid translation", titlefontsize=9)
+        scatter!(h2, [1e6 * max(g, 0.0515e-6)], [1e3 * F.c], color=OI.vermillion, ms=6, label="")
+        plot(h1, h2, layout=@layout([a{0.68w} b]), size=(1050, 400), left_margin=5Plots.mm, bottom_margin=6Plots.mm)
+    end
+    gif(anim, outfile, fps=fps)
+end
+
+"Write all figures and animations: the as-built configuration (bottom face on the PCB, top face open) to outdir, and,
+with two_faces = true, the configuration with both faces vented to joinpath(outdir, \"two_faces\")."
+function make_plots(outdir::AbstractString="figs"; two_faces::Bool=true)
     setup_style()
-    mkpath(outdir)
-    for (name, f) in (("mobility", plot_mobility), ("exit_factor", plot_exit), ("frequency", plot_frequency),
-                      ("damping_vs_gap", plot_gap), ("contact_limit", plot_contact), ("pressure_field", plot_pressure))
-        p = f()
-        savefig(p, joinpath(outdir, name * ".pdf"))
-        savefig(p, joinpath(outdir, name * ".png"))
-        println("wrote ", joinpath(outdir, name), ".{pdf,png}")
+    d, fl = Device(), Fluid()
+    sets = Any[(outdir, Config(), true)]
+    two_faces && push!(sets, (joinpath(outdir, "two_faces"), Config(faces=:two), false))
+    for (dir, cfg, full) in sets
+        mkpath(dir)
+        figs = Any[("exit_factor", () -> plot_exit(cfg)), ("frequency", () -> plot_frequency(d, fl, cfg)),
+                   ("damping_vs_gap", () -> plot_gap(d, fl, cfg)), ("contact_limit", () -> plot_contact(fl, cfg)),
+                   ("pressure_field", () -> plot_pressure(d, fl, cfg)),
+                   ("film_flow_dissipation", () -> plot_film_flow(d=d, fl=fl, cfg=cfg)),
+                   ("correction_budget", () -> plot_correction_budget(d=d, fl=fl, cfg=cfg)),
+                   ("contact_comparison", () -> plot_contact_comparison(d=d, fl=fl, cfg=cfg))]
+        full && append!(figs, Any[("mobility", () -> plot_mobility(fl)), ("kinetic_flow_factor", () -> plot_kinetic(fl=fl))])
+        for (name, fn) in figs
+            p = fn()
+            savefig(p, joinpath(dir, name * ".pdf"))
+            savefig(p, joinpath(dir, name * ".png"))
+            println("wrote ", joinpath(dir, name), ".{pdf,png}")
+        end
+        full && animate_womersley(joinpath(dir, "womersley_cycle.gif"))
+        animate_closing(joinpath(dir, "closing_stroke.gif"); d=d, fl=fl, cfg=cfg)
+        println("wrote the animations in ", dir)
     end
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__
     selftest()
     run_case_study()
+    run_case_study(faces=:two)
     make_plots()
 end

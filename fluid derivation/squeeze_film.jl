@@ -1,26 +1,3 @@
-#=
-squeeze_film_fd.jl — frequency-domain squeeze-film impedance of a laterally drained film
-(thickness-mode theory with first-order slip, gas inertia (Womersley), compressibility (squeeze number)
-and a lateral exit factor f(h, ω) calibrated from Stokes cells).  Fluid solution only.
-
-Companion to "Squeeze-film impedance of laterally drained films closing to line contact".
-Time dependence exp(iωt).  The generalized force on the structure is Q = -Z(ω) v, where v holds the
-velocity amplitudes of the generalized coordinates; Re Z is damping, Im Z > 0 is mass-like, Im Z < 0 spring-like.
-
-Usage (Julia ≥ 1.9):
-    ] add Plots
-    include("squeeze_film_fd.jl")
-    selftest()          # compares with reference values from the verified Python reference implementation
-    run_case_study()    # prints the case-study numbers quoted in the paper
-    make_plots("figs")  # writes the figures (PDF and PNG)
-
-Model summary (paper, Eq. numbers in brackets refer to the paper):
-  field equation   ∂y(G ∂y P) + ∂ζ((G/f) ∂ζ P) − iω (12η h/(n pa)) P = 12η Σ_j h_j v_j
-  mobility         G(h, ω) = (3h³/λ²)[1 − tanh λ / (λ(1 + (2b/h) λ tanh λ))],  λ = (h/2)√(iω/ν)
-  thickness modes  k_n = (2n+1)π/(2ℓd),  w_n = 8W/((2n+1)²π²)   (ℓd = W one open face, W/2 two)
-  impedance        Z_ij = 12η Σ_n w_n ∫ h_i X_n^[j] dy + strip tail,   L_n X_n^[j] = h_j
-SI units throughout.
-=#
 
 using LinearAlgebra, Printf
 using Plots
@@ -371,9 +348,6 @@ function pocket_from_rest(d::Device, fl::Fluid; Np::Int=512, chi_rest::Float64=0
     return chi_rest < 1 ? (1 - chi_rest) / (chi_rest * I0) : 0.0
 end
 
-"2×2 impedance of the whole comb (both gaps of every electrode) at state (x1, x2) and frequency w."
-"Tip-pocket conductance: 3-D calibrated for one open face; doubled when both faces vent the pocket (an estimate,
-no 3-D calibration exists for two faces; at rest the factor changes the damping by 0.3%)."
 pocket_for(d::Device, fl::Fluid, cfg::Config) = pocket_from_rest(d, fl; kinetic=cfg.kinetic) * (cfg.faces == :two ? 2.0 : 1.0)
 
 function device_impedance(d::Device, fl::Fluid, cfg::Config, x1, x2, w, kpocket;

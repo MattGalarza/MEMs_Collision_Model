@@ -673,7 +673,7 @@ import .AnalyticalModel
 # --------------------------------------- External Force ------------------------------------
  
 # Sine Wave External Force
-f = 20.0        # Frequency (Hz)
+f = 100.0        # Frequency (Hz)
 alpha = 2.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
                 # Quasi-static contact threshold at 3 V is between 2.0 and 2.1
 g = 9.80665     # Gravitational constant (m/s^2)
@@ -693,7 +693,7 @@ Fext_sine = t -> A*ramp(t)*sin(2*pi*f*t)
 # in the window, g) and f (drive frequency) come from the record, so the ramp, the last-two-cycle
 # windows, the animation and the run folder work unchanged. Runtime scales with the window length:
 # the full 9.9 s record of accelT1 is ~1000 drive cycles; (2.0, 3.5) brackets the jump.
-use_experiment   = true
+use_experiment   = false
 exp_dir          = joinpath(@__DIR__, "data")
 exp_accel_file   = joinpath(exp_dir, "accelT1.tmp.txt")
 exp_output_file  = joinpath(exp_dir, "voltageT1.tmp.txt")   # "" or a missing file: model only
@@ -894,6 +894,18 @@ if use_ledger
 end
  
 use_ledger || println("Run-level energy check skipped: set use_ledger = true to carry the work integrals.")
+
+# ------------------------------------ Speed check ------------------------------------
+let Z = reduce(hcat, sol.u) .* zscale, q = p_new
+    tp  = q.orient == 0 ? Z[3, :] : Z[3, :] .- Z[1, :]     # median tip relative to its stiff face
+    tpd = q.orient == 0 ? Z[4, :] : Z[4, :] .- Z[2, :]
+    d   = abs.(tp) .- q.gc
+    vin  = maximum([abs(tpd[i-1]) for i in 2:length(d) if d[i-1] < 0 && d[i] >= 0]; init = 0.0)
+    vout = maximum([abs(tpd[i])   for i in 2:length(d) if d[i-1] >= 0 && d[i] < 0]; init = 0.0)
+    println("gas-film linearity: max tip speed at impact ", round(1e3*vin; digits = 2),
+            " mm/s, at release ", round(1e3*vout; digits = 2), " mm/s (limit 80 mm/s; peak film pressure ~",
+            round(100*129e3*max(vin, vout)/101325; digits = 2), "% of 1 atm)")
+end
 
 # ------------------------------------ Run Folder & Saving ------------------------------------
 # Every figure (PDF), the output data (XLSX) and the animation are written to RUN_Xg_YV_ZHz beside

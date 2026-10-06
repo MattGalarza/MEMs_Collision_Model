@@ -793,7 +793,7 @@ Fext_sine = t -> A*ramp(t)*sin(2*pi*f*t)
 # in the window, g) and f (drive frequency) come from the record, so the ramp, the last-two-cycle
 # windows, the animation and the run folder work unchanged. Runtime scales with the window length:
 # the full 9.9 s record of accelT1 is ~1000 drive cycles; (2.0, 3.5) brackets the jump.
-use_experiment   = true
+use_experiment   = false
 exp_dir          = joinpath(@__DIR__, "data")
 exp_accel_file   = joinpath(exp_dir, "accelT1.tmp.txt")
 exp_output_file  = joinpath(exp_dir, "voltageT1.tmp.txt")   # "" or a missing file: model only

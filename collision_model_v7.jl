@@ -8,7 +8,7 @@
 #   * free path: the BGK equivalent length 74.87 nm (with sigmap = 1.016191)
 # The v6 closure is recovered to round-off with vent_faces = 2, kinetic = false, exit_factor = false,
 # seal_shift = false, chi_rest = 0, lambda = 70e-9, sigmap = 1.016.
-# ce was fitted with the v6 film and must be refit to the bench flight-time ratio (see the Params notes).
+# ce was fitted with the v6 film; check the printed chatter-interval ratio against the bench 0.73 (Params notes).
 
 # ------------------------------------------ Libraries --------------------------------------
  
@@ -57,11 +57,10 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     wss::T = 14e-6       # Soft-stopper width
     Leff::T = 400e-6     # Effective (overlap) electrode length
     Lf::T = 450e-6       # Full electrode length
-    Lsp::T = 1400e-6     # Suspension spring length
-    Lss::T = 1000e-6     # Soft-stopper length
+    Lsp::T = 1600e-6     # Suspension spring length
+    Lss::T = 600e-6     # Soft-stopper length
     gss::T = 14e-6       # Soft-stopper position
-    gap_slope::T = NaN   # Facing-wall gap slope. NaN -> (wb - wt)/Lf (mobile and fixed
-                         # faces both inclined). Override with metrology.
+    gap_slope::T = NaN   # Facing-wall gap slope. NaN -> (wb - wt)/Lf
  
     # Array / suspension topology
     N::Int = 160         # Number of gap branches (N/2 compliant electrodes, two faces each)
@@ -93,9 +92,10 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     #      here; chosen so the simulated flight-time ratio matches the bench (~0.73).
     #      Stands in for an interface loss: it also damps the free 55 kHz beam mode
     #      (zeta ~ 0.57), which no measurement here constrains.
-    #      v7 REFIT NEEDED: ce was fitted with the v6 film. The v7 film removes 12-16% of the shuttle speed per
-    #      chatter flight (v6 film: 5-8%), so the same ce gives a lower flight-time ratio; a decoupled estimate
-    #      puts the refit near 0.25-0.4e-4. The film barely damps the contact mode itself (< 0.5%).
+    #      v7 CHECK: ce was fitted with the v6 film. The v7 film removes 12-16% of the shuttle speed per chatter
+    #      flight (v6 film: 5-8%) and barely damps the contact mode itself (< 0.5%). With the contact keeping
+    #      e ~ 0.86 (from ce) and a flight keeping ~0.85, a decoupled estimate puts the v7 chatter-interval
+    #      ratio near the bench 0.73 with ce unchanged. The run prints the ratio; refit ce only if it misses.
     #      c1 must exclude the comb film, which is 21.0 uN s/m at rest in v7 (1.96 in v6).
     # vent_faces : squeeze-film drainage. 0 = lengthwise only (submitted model, gas
     #      leaves through the two ends of the 400 um overlap); 1 = one device-layer
@@ -774,7 +774,7 @@ import .AnalyticalModel
  
 # Sine Wave External Force
 f = 20.0        # Frequency (Hz)
-alpha = 2.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
+alpha = 1.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
                 # Quasi-static contact threshold at 3 V is between 2.0 and 2.1
 g = 9.80665     # Gravitational constant (m/s^2)
 A = alpha*g
@@ -1242,7 +1242,7 @@ ph5z = plot(Wzoom.Q .* 1e12, Wzoom.V .* 1e3, xlabel = "Q (pC)", ylabel = "Vout (
  
 # ========================== (4) LABELLED COLLISION CLOSE-UPS =============================
 # Same-side contact sequences from the accepted steps: entries closer together than `gap`
-# belong to one sequence (one wall, one half cycle).
+# belong to one sequence (one wall, one half cycle); a change of wall always starts a new one.
 function contact_sequences(tt, x2, x1dot, gc; gap = 8e-3)
     dls  = abs.(x2) .- gc
     ient = [i for i in 2:length(dls) if dls[i-1] < 0 && dls[i] >= 0]
@@ -1251,7 +1251,7 @@ function contact_sequences(tt, x2, x1dot, gc; gap = 8e-3)
     isempty(ient) && return seqs, ient, iext
     k0 = 1
     for k in 2:length(ient)+1
-        if k > length(ient) || tt[ient[k]] - tt[ient[k-1]] > gap
+        if k > length(ient) || tt[ient[k]] - tt[ient[k-1]] > gap || sign(x2[ient[k]]) != sign(x2[ient[k-1]])
             ks   = k0:k-1
             jx   = findfirst(>(ient[ks[end]]), iext)
             tend = jx === nothing ? tt[end] : tt[iext[jx]]
@@ -1375,7 +1375,7 @@ function collision_figure(Wd, p; tag = "", unit = :us)
     return fig, met
 end
  
-seqs, ient, iext = contact_sequences(sol.t, tauS, taudS, p_new.gc)
+seqs, ient, iext = contact_sequences(sol.t, tauS, taudS, p_new.gc; gap = min(8e-3, 0.25/f))
 if isempty(seqs)
     println("\nNo contact this run (closest approach ",
             round(-maximum(abs.(tauS) .- p_new.gc)*1e9; digits = 1), " nm). Collision close-ups skipped.")
@@ -1389,6 +1389,32 @@ else
     @printf("wall +1: %d visits, %d contacts     wall -1: %d visits, %d contacts\n",
             count(s -> s.side > 0, seqs), sum([s.n for s in seqs if s.side > 0]; init = 0),
             count(s -> s.side < 0, seqs), sum([s.n for s in seqs if s.side < 0]; init = 0))
+
+    # Chatter-interval ratio: successive impact-to-impact intervals within one wall visit, the
+    # calibration target for ce (bench at 20 Hz: successive ratios 0.68-0.75, about 0.73)
+    let tin = crossings(sol.t, abs.(tauS) .- p_new.gc)[1], sg = sign.(tauS)
+        wall(tq) = sg[clamp(searchsortedfirst(sol.t, tq), 1, length(sol.t))]
+        vis = Vector{Vector{Float64}}(); cur = Float64[]
+        for tk in tin
+            if !isempty(cur) && (wall(tk) != wall(cur[end]) || tk - cur[end] > min(8e-3, 0.25/f))
+                push!(vis, cur); cur = Float64[]
+            end
+            push!(cur, tk)
+        end
+        isempty(cur) || push!(vis, cur)
+        rr = Float64[]
+        for v in vis
+            length(v) >= 3 || continue
+            dv = diff(v); append!(rr, dv[2:end] ./ dv[1:end-1])
+        end
+        if isempty(rr)
+            println("chatter-interval ratio: no wall visit with three or more impacts")
+        else
+            rs = sort(rr); nr = length(rs)
+            @printf("chatter-interval ratio: %d ratios from %d visits, median %.3f, interquartile %.3f-%.3f (bench ~0.73)\n",
+                    nr, count(v -> length(v) >= 3, vis), rs[cld(nr, 2)], rs[cld(nr, 4)], rs[cld(3*nr, 4)])
+        end
+    end
  
     recent = [s for s in seqs if s.t0 >= sol.t[end] - 2*Tdrive]
     isempty(recent) && (recent = seqs)

@@ -1,3 +1,23 @@
+# collision_model_v8.jl -- v7 with the first changes from the physics audit (physics_audit.py, Oct 2026):
+#   * fringing fields in the capacitance function, from a 2-D field solution of the comb cross-section, with the
+#     environment below the device layer as an explicit switch (fringing = :air | :substrate | :none)
+#   * finger-gap disorder switched on (n_cls = 5, sig_off = 90 nm, PROVISIONAL until the SEM-measured spread)
+#   * ce relabelled as a stand-in for unmodelled contact-phase loss (an HDI learning channel), with its own line
+#     in the energy budget
+# v7 is recovered exactly with fringing = :none, n_cls = 1, sig_off = 0.
+#
+# collision_model_v7.jl -- v6 with the gas-film closure of the companion gas-film paper (Oct 2026).
+# Every change is in the squeeze film; the other forces, the states and the energy ledger are untouched.
+#   * one device-layer face vents by default (the device lies on its PCB): vent_faces = 1
+#   * the film conductance carries the linearized-BGK kinetic flow factor (kinetic = true)
+#   * the face drainage passes through the Stokes-cell exit factor f0(h) (exit_factor = true)
+#   * the tip end vents through a pocket calibrated on the 3-D Stokes solution, sealing fraction 0.75 at
+#     rest (chi_rest), in series with the contact sealing, which now starts at nominal contact (seal_shift)
+#   * free path: the BGK equivalent length 74.87 nm (with sigmap = 1.016191)
+# The v6 closure is recovered to round-off with vent_faces = 2, kinetic = false, exit_factor = false,
+# seal_shift = false, chi_rest = 0, lambda = 70e-9, sigmap = 1.016.
+# ce was fitted with the v6 film; check the printed chatter-interval ratio against the bench 0.73 (Params notes).
+
 # ------------------------------------------ Libraries --------------------------------------
  
 using DifferentialEquations, Plots, Printf, XLSX
@@ -66,31 +86,49 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     e::T = 8.85e-12      # Permittivity of free space
     ep::T = 3.2          # Relative permittivity of Parylene-C
     eta::T = 1.849e-5    # Viscosity of air
-    lambda::T = 70e-9    # Mean free path of air molecules (m)
-    sigmap::T = 1.016    # Slip coefficient for rarefaction
+    lambda::T = 74.866e-9 # Equivalent free path ell = eta*sqrt(2/(rho_air*p_a)), 20 C and 1 atm: the length the
+                          # BGK slip coefficient and the kinetic factor refer to (v6: 70e-9)
+    sigmap::T = 1.016191  # BGK slip coefficient, diffuse walls (v6: 1.016)
  
     # Dissipation closures -------------------------------------------------------
     # These three lines are what separates panels (d)/(e) from the submitted model.
     # c1 : shuttle damping [N s/m]. 5.29e-5 = mtot*w0/Q with Q = 50 (PLACEHOLDER).
     #      It matters: the flight-time ratio of the chatter is 0.73-0.79 with it and
     #      0.76-0.85 without. Replace by a measured ring-down before fitting ce.
-    # ce : damping of RELATIVE tip/root velocity, per beam [N s/m]. The only loss that
+    # ce : STAND-IN for unmodelled contact-phase loss (v8: an HDI learning channel, not physics). The physics
+    #      audit finds every identified mechanism (air film, Parylene viscoelasticity, anchor and thermoelastic
+    #      loss) supplies about 0.004 of the contact-mode damping ratio ce provides (0.048); the likeliest missing
+    #      physics is energy spreading across non-identical fingers, which the offset classes begin to represent.
+    #      Damping of RELATIVE tip/root velocity, per beam [N s/m]. The only loss that
     #      acts while the tips rest on the wall and the shuttle bounces on the N/2
     #      beam springs (contact mode ~4.3 kHz). zeta_c = (N/2)*ce/(2*M11*w_c) = 0.052
     #      here; chosen so the simulated flight-time ratio matches the bench (~0.73).
     #      Stands in for an interface loss: it also damps the free 55 kHz beam mode
     #      (zeta ~ 0.57), which no measurement here constrains.
+    #      v7 CHECK: ce was fitted with the v6 film. The v7 film removes 12-16% of the shuttle speed per chatter
+    #      flight (v6 film: 5-8%) and barely damps the contact mode itself (< 0.5%). With the contact keeping
+    #      e ~ 0.86 (from ce) and a flight keeping ~0.85, a decoupled estimate puts the v7 chatter-interval
+    #      ratio near the bench 0.73 with ce unchanged. The run prints the ratio; refit ce only if it misses.
+    #      c1 must exclude the comb film, which is 21.0 uN s/m at rest in v7 (1.96 in v6).
     # vent_faces : squeeze-film drainage. 0 = lengthwise only (submitted model, gas
     #      leaves through the two ends of the 400 um overlap); 1 = one device-layer
     #      face open as well; 2 = both faces open (top surface + cavity underneath).
     #      Lengthwise-only overdamps by ~210x at rest, ~40x at a 1 um gap, 6.5x at
-    #      contact relative to 2 (57x / 14x / 3.7x relative to 1).
+    #      contact relative to 2 (57x / 14x / 3.7x relative to 1) [ratios for the v6 closure].
     c::T = 1.0           # Film scale -- physical default
     c1::T = 5.29e-5      # Shuttle damping [N s/m]   (submitted model: 0)
     ce::T = 0.75e-4      # Beam relative damping, per beam [N s/m]   (submitted model: 0)
-    vent_faces::Int = 2  # Film drainage: 0 lengthwise | 1 one face open | 2 both faces open
-    vent_modes::Int = 4  # Thickness modes solved exactly; higher modes use the strip limit
-                         # (1, 2, 4, 8 modes -> 2.213, 2.083, 2.068, 2.066 mN s/m at contact)
+    vent_faces::Int = 1  # Film drainage: 0 lengthwise | 1 one face open (as built, on the PCB) | 2 both faces open
+    vent_modes::Int = 4  # Thickness modes solved exactly; higher modes use the strip limit. v7, one face:
+                         # 1, 2, 4, 8, 24 modes -> 3.563, 3.059, 2.989, 2.981, 2.980 mN s/m at contact (21.003 uN s/m
+                         # at rest from 2 modes); use 8 for final figures (v6: 2.213, 2.083, 2.068, 2.066)
+
+    # Gas-film closure (v7, gas-film paper). v6 closure: vent_faces = 2, kinetic = false, exit_factor = false,
+    # seal_shift = false, chi_rest = 0, lambda = 70e-9, sigmap = 1.016 (reproduces v6 to round-off).
+    kinetic::Bool = true     # Linearized-BGK flow factor on the film conductance (false: first-order slip only)
+    exit_factor::Bool = true # Stokes-cell exit factor f0(h) on the face drainage (false: p = 0 exactly at the face)
+    seal_shift::Bool = true  # Contact sealing over 0 < delta < 2*ls after nominal contact (false: centred on contact)
+    chi_rest::T = 0.75       # Tip-pocket sealing fraction at rest, from the 3-D Stokes solution (0: open tip)
 
     # Electrode orientation (v5.2) ---------------------------------------------------
     # orient : 1 = compliant (tapered) electrodes anchored to the SUBSTRATE, stiff electrodes on
@@ -105,9 +143,10 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     # equal-population classes, each with its own tip coordinate (states appended after the work
     # integrals). n_cls = 1 and mu_off = 0 recover the synchronized model exactly. The measured
     # 1.85 kHz ring and the 150 Hz output suggest sig_off ~ 90 nm (to be measured by SEM).
-    n_cls::Int = 1       # Offset classes (odd keeps a median class as the reference tip, states 3-4)
+    n_cls::Int = 5       # Offset classes (odd keeps a median class as the reference tip, states 3-4). v8 default 5
     mu_off::T = 0.0      # Mean finger offset [m] (systematic: selects the dominant wall)
-    sig_off::T = 0.0     # Spread of finger offsets [m] (staggered engagement)
+    sig_off::T = 90e-9   # Spread of finger offsets [m] (staggered engagement). v8 default 90 nm: PROVISIONAL,
+                         # the chapter's inference from the 1.85 kHz ring; replace with the SEM-measured spread
  
     # Hard stop (disabled until the as-fabricated gap is measured) ----------------
     ghs::T = Inf         # Hard-stop engagement position [m]; must satisfy ghs >= gss
@@ -119,7 +158,7 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     #         electrostatic force at contact (~1/(h_eff + hd)) and the film floor.
     # epsg  : smoothing of the positive part in the gap law h = h_eff + softpos(d).
     # epsw  : wall activation width. epss : stopper activation width.
-    # ls    : tip-vent sealing half-width; chi goes 0 -> 1 over -ls < delta < ls.
+    # ls    : tip-vent sealing width; chi goes 0 -> 1 over 0 < delta < 2*ls (seal_shift) or -ls < delta < ls (v6).
     # kw,pw : wall stiffness / exponent, per beam.  cw : Hunt-Crossley loss.
     #         cw acts on the TIP velocity, which is nearly zero in the contact mode,
     #         so it does NOT set the shuttle-level restitution; ce does.
@@ -130,18 +169,29 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     epsw::T = 0.5e-9     # Wall engagement smoothing
     epss::T = 1e-9       # Soft/hard stopper engagement smoothing
     ls::T = 25e-9        # Tip-vent sealing half-width
-    seal::Bool = true    # Robin tip closure: vent seals as the tip lands (false: always open)
+    seal::Bool = true    # Robin tip closure: vent seals as the tip lands (false: no contact sealing; the tip
+                         # then vents through the pocket alone, fully open if chi_rest = 0)
     kw::T = 1e6          # Hunt-Crossley wall stiffness, per beam (N/m^1.5)
     pw::T = 1.5          # Hunt-Crossley exponent
     cw::T = 50.0         # Hunt-Crossley dissipation (s/m)
  
+    # Electrostatic field (v8) ---------------------------------------------------------
+    # fringing : the capacitance of each strip along the overlap is e*(Tf/u + fe(u)), u = air-equivalent gap,
+    #   with fe from a 2-D field solution of the comb cross-section (tip-region widths, Tf = 25 um; refit if Tf
+    #   changes). :air = device layer in air above and below; :substrate = a conducting plane 2 um below the
+    #   layer at the stator potential (handle wafer under a released oxide); :none = v7 parallel strips.
+    #   The two environments differ in sign at the rest gap: the output-relevant curvature is 1.16x parallel plate
+    #   in air and 0.98x over the substrate. Confirm which applies from the process record (oxide thickness, and
+    #   whether the handle remains under the fingers).
+    fringing::Symbol = :air
+
     # Electrical parameters
     cp::T = 5e-12        # Parasitic capacitance (parallel to the variable capacitor)
     Vbias::T = 3       # Bias voltage
     Rload::T = 0.42e6    # Load resistance
  
     # Numerical resolution
-    panels::Int = 256    # Graded Simpson panels along the overlap (2*panels + 1 nodes).
+    panels::Int = 64    # Graded Simpson panels along the overlap (2*panels + 1 nodes).
                          # vs 1024 panels the vented film differs by 1.3e-3 / 3.4e-4 / 7e-5
                          # at 128 / 256 / 512; dC by < 1e-6. Panels (d),(e) were run at 128.
  
@@ -151,6 +201,7 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     gc::T = 0.0              # Tip travel to nominal contact, g0 - 2*Tp - h_eff
     hd::T = 0.0              # Effective dielectric thickness, 2*Tp/ep
     kp::T = 0.0              # Slip conductance length 6*sigmap*lambda
+    kpocket::T = Inf         # Tip-pocket conductance [m^2] (Robin end condition G dp/dy = kappa p)
     ke::T = 0.0              # Electrode tip stiffness, per beam
     k1::T = 0.0              # Linear spring constant
     k3::T = 0.0              # Cubic spring constant
@@ -209,6 +260,68 @@ glquad(f, lo, hi) = (hi - lo)/2*sum(GLW[j]*f((lo + hi)/2 + (hi - lo)/2*GLX[j]) f
 bwidth(s, p) = p.wt + (p.wb - p.wt)*s/p.Lf
 bEI(s, p)    = p.E*p.Tf*bwidth(s, p)^3/12
 bshape(s, ke, p) = s == 0 ? 0.0 : ke*glquad(z -> (s - z)*(p.Lf - z)/bEI(z, p), 0.0, s)
+
+# ------------------------------ fringing fields (v8) ------------------------------
+# Excess capacitance of one strip per unit length, in units of e, fitted to the 2-D field solution over 0.1-40 um:
+# within 0.3% (air) and 0.03% (substrate) in capacitance, reproducing the field slope and curvature ratios.
+const FR_AIR = (0.6334957497833412, 33.409600175935566, 0.5609469552319918)
+const FR_SUB = (0.6530269916008185, 3.6776421436695546, 8.319629898810547, 0.527099099530331, 3.677583579542634)
+# returns (fe, dfe/du): fe dimensionless, u in m, the derivative in 1/m (exact derivative of fe, so forces stay
+# exact gradients of the field energy and the ledger stays an acceptance test)
+@inline function fringe(u, p)
+    p.fringing === :none && return (0.0, 0.0)
+    x = u*1e6
+    if p.fringing === :air
+        a, b, c = FR_AIR
+        return (a*log1p(b/x) + c, -a*b/(x*(x + b))*1e6)
+    end
+    a, b, c, d, g = FR_SUB
+    return (a*log1p(b/x) + c + d*log1p(x/g), (-a*b/(x*(x + b)) + d/(x + g))*1e6)
+end
+
+# ------------------------------ gas-film closure (v7) ------------------------------
+# Linearized-BGK plane Poiseuille flow, diffuse walls (validated against Barichello et al. 2001 to seven digits):
+# reduced flow rate G_P(delta), delta = h/lambda, tabulated for 1e-5 <= delta <= 60; ln(delta*G_P) is monotone and
+# is interpolated by PCHIP in ln(delta). Table and interpolation copied from the paper's solver (squeeze_film_fd.jl).
+const KIN_D = [9.999999999999999e-06, 1.1388973796922415e-05, 1.2970872414698539e-05, 1.4772492605422543e-05, 1.682435311983875e-05, 1.916121168320134e-05, 2.1822653777726372e-05, 2.4853763205383563e-05, 2.8305885790102787e-05, 3.2237499156215916e-05, 3.671520331684516e-05, 4.181484885242285e-05, 4.7622821790251516e-05, 5.423750695046804e-05, 6.177095454692779e-05, 7.03507782745846e-05, 8.012231703623429e-05, 9.125109692743828e-05, 0.0001039256351847022, 0.00011836063359470917, 0.00013480061545972778, 0.00015352406772798543, 0.00017484815845509683, 0.00019913410950852365, 0.00022679331552660548, 0.0002582943127849667, 0.00029417071602020684, 0.0003350302576576041, 0.0003815650825638619, 0.0004345634727140361, 0.0004949232003839766, 0.0005636667360662092, 0.0006419585687254839, 0.0007311249317924354, 0.0008326762690460736, 0.0009483328209484852, 0.0010800537648543815, 0.0012300704027193954, 0.0014009239584940997, 0.0015955086254770129, 0.00181712059283214, 0.002069513881761337, 0.002356963937174706, 0.002684340052077382, 0.0030571878515138653, 0.003481823233316095, 0.003965439356975268, 0.004516228492987621, 0.0051435207967550425, 0.005857942357816869, 0.006671595201705823, 0.007598262293590093, 0.008653641016384118, 0.00985560907835718, 0.011224527354612058, 0.012783584792451562, 0.014559191223196672, 0.01658142473453697, 0.01888454118172828, 0.021507554468560564, 0.024494897427831785, 0.02789717449638785, 0.03177201893475335, 0.036185069112322873, 0.04121108039600719, 0.046935191477298896, 0.05345436658884934, 0.06087903804114902, 0.06933497690324891, 0.07896542351613227, 0.08993351392881116, 0.10242504336003874, 0.11665161349761234, 0.13285421694930283, 0.15130731956462556, 0.1723235097804087, 0.19625879374827782, 0.2235186259414737, 0.25456477739715466, 0.28992315793955825, 0.3301927248894628, 0.37605562917005037, 0.42828877068028764, 0.4877769586793909, 0.5555279001142092, 0.632689269786006, 0.72056815151868, 0.8206531796543067, 0.9346397559443963, 1.0644587690012692, 1.2123093028059746, 1.3806958883422527, 1.5724709293848431, 1.7908830211186217, 2.0396319800873237, 2.3229315176579513, 2.6455806186651625, 3.013044834362333, 3.431548866750505, 3.908182012628031, 4.451018253542416, 5.069253025921794, 5.773358988219298, 6.57526342370561, 7.488550284044557, 8.528690296191936, 9.713303030539645, 11.062455369638311, 12.599001433443439, 14.348969719287528, 16.342004014579885, 18.611865551125124, 21.1970049073607, 24.141213346316686, 27.494364622711448, 31.31325982510913, 35.66258956443913, 40.6160298079796, 46.25748992180995, 52.68253406308962, 60.0]
+const KIN_G = [6.853741530642733, 6.780417036395427, 6.70709864625514, 6.633787027380521, 6.560482917199392, 6.48718713044266, 6.41390056682413, 6.340624219433568, 6.267359183879465, 6.194106668252924, 6.120868003978412, 6.047644657601969, 5.974438243602629, 5.901250538281386, 5.8280834948168305, 5.7549392595535895, 5.6818201896005185, 5.608728871830426, 5.535668143342408, 5.462641113487963, 5.389651187520524, 5.316702091962343, 5.243797901751522, 5.170943069249882, 5.0981424551656565, 5.0254013614606245, 4.9527255662769125, 4.8801213609322325, 4.8075955889972075, 4.735155687468187, 4.662809730019578, 4.590566472306283, 4.518435399255351, 4.446426774265302, 4.3745516901962125, 4.302822122003805, 4.231250980833252, 4.159852169350721, 4.088640638050669, 4.017632442232379, 3.946844799300257, 3.8762961459934604, 3.806006195114114, 3.7359959912760687, 3.6662879651664415, 3.5969059857725214, 3.527875410009863, 3.459223129163532, 3.3909776115586183, 3.323168940877811, 3.2558288495786902, 3.1889907469017262, 3.122689741036616, 3.056962655101532, 2.9918480367196945, 2.927386161125368, 2.863619027925489, 2.8005903518623176, 2.7383455481908214, 2.6769317135839907, 2.6163976038294536, 2.556793609967119, 2.498171734955004, 2.440585573428212, 2.3840902976452587, 2.328742653289812, 2.2746009694234677, 2.221725187563767, 2.1701769156012727, 2.1200195130720405, 2.0713182151818263, 2.0241403039436197, 1.9785553358634986, 1.9346354368070882, 1.8924556760352085, 1.8520945329388177, 1.8136344717810189, 1.7771626418067477, 1.742771722478073, 1.7105609363879222, 1.6806372556853115, 1.6531168316761178, 1.628126681746306, 1.605806672958995, 1.5863118477019629, 1.5698151436621617, 1.556510568243731, 1.5466168963235072, 1.5403819699286554, 1.538087688900252, 1.5400557926824134, 1.5466545447246993, 1.5583064421830306, 1.5754970841082905, 1.5987853405392412, 1.628814972327681, 1.6663278568362379, 1.7121789780994436, 1.7673533428030044, 1.8329849880382287, 1.9103782575637671, 2.0010315465136164, 2.1066637580670333, 2.2292437879428237, 2.371023623157809, 2.534574541208286, 2.7228299396244884, 2.9391323933134523, 3.1872874929151367, 3.471626484771623, 3.7970783108401807, 4.169252301257675, 4.594533428667247, 5.080191711431437, 5.634507196738212, 6.266911469811236, 6.98814994844532, 7.810465596892156, 8.747807880198096, 9.816070350514547, 11.033360902484304]
+function pchip_slopes1(x, y)
+    hx = diff(x); s = diff(y) ./ hx
+    d = zeros(length(x)); d[1] = s[1]; d[end] = s[end]
+    for k in 2:length(x)-1
+        w1 = 2*hx[k] + hx[k-1]; w2 = hx[k] + 2*hx[k-1]
+        d[k] = s[k-1]*s[k] > 0 ? (w1 + w2)/(w1/s[k-1] + w2/s[k]) : 0.0
+    end
+    return d
+end
+const LKD = log.(KIN_D)
+const LKG = log.(KIN_D .* KIN_G)
+const DKG = pchip_slopes1(LKD, LKG)
+function gp_bgk(dl)
+    dl < KIN_D[1] && return 0.35887 + 0.56410*log(1/dl)
+    dl > KIN_D[end] && return dl/6 + 1.016191 + 1.0650/dl - 2.1246/dl^2
+    lw = log(dl)
+    j  = clamp(searchsortedlast(LKD, lw), 1, length(LKD) - 1)
+    dx = LKD[j+1] - LKD[j]; t = (lw - LKD[j])/dx
+    v  = (2t^3 - 3t^2 + 1)*LKG[j] + (t^3 - 2t^2 + t)*dx*DKG[j] + (-2t^3 + 3t^2)*LKG[j+1] + (t^3 - t^2)*dx*DKG[j+1]
+    return exp(v)/dl
+end
+# Film conductance [m^3]: first-order slip h^2 (h + kp), times the BGK factor Q(delta)/(1 + 6 sigmap/delta) >= 1
+function filmG(h, p)
+    G = h^2*(h + p.kp)
+    p.kinetic || return G
+    dl = h/p.lambda
+    return G*6*gp_bgk(dl)/dl/(1 + 6*p.sigmap/dl)
+end
+# Exit factor of the face drainage, f0 = (1 + 2 (c0 + c1 X/(X + x0)) X)^3 with X = h/(2 l_d), l_d = Tf (one open face)
+# or Tf/2 (two): the gas turning out of the slot, fitted to the paper's 2-D Stokes cells within 0.21%
+const F0_ONE = (0.4207, 0.2449, 1.0015)
+const F0_TWO = (0.4066, 0.1279, 0.2733)
+function exitf(h, p)
+    c0, c1, x0 = p.vent_faces == 2 ? F0_TWO : F0_ONE
+    X = h/(2*(p.vent_faces == 2 ? p.Tf/2 : p.Tf))
+    return (1 + 2*(c0 + c1*X/(X + x0))*X)^3
+end
  
 function create_params(p::Params{T}; verbose = true) where T<:Real
     @assert p.N > 0 && iseven(p.N) && p.nsp_par > 0 && p.nsp_ser > 0 && p.nss > 0
@@ -219,6 +332,8 @@ function create_params(p::Params{T}; verbose = true) where T<:Real
     @assert all(>=(0), (p.c, p.c1, p.ce, p.cw, p.gamma3, p.cp, p.Tp, p.lambda, p.sigmap, p.khs))
     @assert p.ghs >= p.gss && p.vent_faces in (0, 1, 2) && p.vent_modes >= 1
     @assert p.orient in (0, 1) && p.n_cls >= 1 && p.sig_off >= 0 && isfinite(p.mu_off)
+    @assert 0 <= p.chi_rest <= 1 && (!p.kinetic || p.lambda > 0)
+    @assert p.fringing in (:air, :substrate, :none)
  
     p.nb = div(p.N, 2)
     p.a  = isnan(p.gap_slope) ? (p.wb - p.wt)/p.Lf : p.gap_slope
@@ -285,6 +400,17 @@ function create_params(p::Params{T}; verbose = true) where T<:Real
     ec = [p.mu_off + p.sig_off*normq((j - 0.5)/nc) for j in 1:nc]
     p.ecls = ec[sortperm(collect(1:nc); by = j -> (abs(j - (nc + 1)/2), j))]
     p.wcls = fill(1/nc, nc)
+
+    # Tip-pocket conductance, calibrated at rest: sealing fraction chi_rest measured against the film's own
+    # lengthwise resistance I0 (gas-film paper: 3-D Stokes solution, one open face; doubled for two faces)
+    if p.chi_rest <= 0
+        p.kpocket = Inf
+    elseif p.chi_rest >= 1
+        p.kpocket = 0.0
+    else
+        hr, _, _ = gapfield(0.0, 0.0, 1.0, p)
+        p.kpocket = (1 - p.chi_rest)/(p.chi_rest*dot(p.wq, 1 ./ filmG.(hr, Ref(p))))*(p.vent_faces == 2 ? 2.0 : 1.0)
+    end
  
     verbose && report(p)
     return p
@@ -324,7 +450,9 @@ function film_lengthwise(h, h1, h2, chi, p)
 end
  
 # Thickness-vented film (chapter App. D, Eq. D.2), one wall, all beams.
-#   d/dy(G dp/dy) + G d2p/dzeta2 = 12 eta hdot,   p = 0 on the open device-layer faces.
+#   d/dy(G dp/dy) + (G/f0) d2p/dzeta2 = 12 eta hdot,   p = 0 on the open device-layer faces.
+# v7: G carries the BGK factor (filmG), f0(h) is the exit factor of the face drainage (exitf), the strip tail is
+# P = -h_j f0/(G k_n^2), and the tip end is the contact sealing in series with the calibrated pocket.
 # Cosine modes in zeta, k_n = (2n+1)pi/W. Mode n solves (G P')' - G k_n^2 P = h_j with
 # P(Leff) = 0 and the same Robin tip vent as the lengthwise film. Modes >= vent_modes use
 # their strip limit P = -h_j/(G k_n^2). Conservative finite volumes on the graded nodes;
@@ -335,11 +463,22 @@ function film_vented(h, h1, h2, chi, p)
     y = p.y; n = length(y)
     Wv   = p.vent_faces == 2 ? p.Tf : 2*p.Tf
     frac = p.vent_faces == 2 ? 1.0 : 0.5
-    G    = h.^2 .* (h .+ p.kp)
+    G    = filmG.(h, Ref(p))                              # slip, times the BGK factor when p.kinetic
+    fx   = p.exit_factor ? exitf.(h, Ref(p)) : ones(n)      # exit factor of the face drainage
     I0   = dot(p.wq, 1 ./ G)
     gface = [2*G[i]*G[i+1]/(G[i] + G[i+1])/(y[i+1] - y[i]) for i in 1:n-1]  # face conductances
-    open_tip = chi <= 1e-12
-    kappa    = open_tip ? 0.0 : (1 - chi)/(chi*I0)
+    # tip end: contact sealing (chi, against the film's own resistance I0) in series with the pocket
+    kseal = chi <= 1e-12 ? Inf : chi >= 1 ? 0.0 : (1 - chi)/(chi*I0)
+    if isinf(kseal)
+        kappa = p.kpocket
+    elseif isinf(p.kpocket)
+        kappa = kseal
+    elseif kseal == 0 || p.kpocket == 0
+        kappa = 0.0
+    else
+        kappa = 1/(1/kseal + 1/p.kpocket)
+    end
+    open_tip = isinf(kappa)
     H = hcat(h1, h2)
     B = H .* p.vol
     B[n, :] .= 0.0                        # p = 0 at the open far end
@@ -347,7 +486,7 @@ function film_vented(h, h1, h2, chi, p)
     V = zeros(2, 2); csum = 0.0
     for k in 0:p.vent_modes-1
         q = 2*k + 1; kn = q*pi/Wv; w = Wv*(16/(q*pi)^2)/2; csum += 1/q^4
-        dg = -(G .* p.vol) .* kn^2        # leak to the faces
+        dg = -(G ./ fx .* p.vol) .* kn^2  # leak to the faces, through the exit factor
         dg[1:n-1] .-= gface               # right-face conductance of node i
         dg[2:n]   .-= gface               # left-face conductance of node i
         dl = copy(gface); du = copy(gface)
@@ -361,7 +500,7 @@ function film_vented(h, h1, h2, chi, p)
         V .-= w .* (B' * P)
     end
     tail = (pi^4/96 - csum)*8/pi^4*Wv^3   # strip limit of the unsolved modes
-    S = (H .* p.vol)' * (H ./ G)
+    S = (H .* p.vol)' * (H .* fx ./ G)
     fac = 12*p.eta*p.nb*p.c*frac
     return fac*(V[1,1] + tail*S[1,1]),
            fac*((V[1,2] + V[2,1])/2 + tail*S[1,2]),
@@ -374,7 +513,8 @@ function film(x1, x2, p)
     for r in (-1.0, 1.0)
         h, h1, h2 = gapfield(x1, x2, r, p)
         tip = p.orient == 0 ? x2 : x2 - x1        # compliant tip relative to the facing stiff face
-        chi = p.seal ? smootherstep((r*tip - p.gc + p.ls)/(2*p.ls)) : 0.0
+        delta = r*tip - p.gc                      # nominal tip overlap (contact when > 0)
+        chi = !p.seal ? 0.0 : p.seal_shift ? smootherstep(delta/(2*p.ls)) : smootherstep((delta + p.ls)/(2*p.ls))
         a11, a12, a22 = p.vent_faces == 0 ? film_lengthwise(h, h1, h2, chi, p) :
                                             film_vented(h, h1, h2, chi, p)
         d11 += a11; d12 += a12; d22 += a22
@@ -442,10 +582,13 @@ function electrostatic(x1, x2, Vout, p)
     Ctotal = p.cp; dC1 = 0.0; dC2 = 0.0
     for r in (-1.0, 1.0)
         h, h1, h2 = gapfield(x1, x2, r, p)
-        f = h .+ p.hd
-        Ctotal += p.nb*p.e*p.Tf*dot(p.wq, 1 ./ f)
-        dC1    -= p.nb*p.e*p.Tf*dot(p.wq, h1 ./ f.^2)
-        dC2    -= p.nb*p.e*p.Tf*dot(p.wq, h2 ./ f.^2)
+        f   = h .+ p.hd
+        fe  = fringe.(f, Ref(p))
+        cs  = p.Tf ./ f .+ first.(fe)                   # strip capacitance per unit length / e
+        dcs = -p.Tf ./ f.^2 .+ last.(fe)                # its exact derivative with respect to the gap
+        Ctotal += p.nb*p.e*dot(p.wq, cs)
+        dC1    += p.nb*p.e*dot(p.wq, h1 .* dcs)
+        dC2    += p.nb*p.e*dot(p.wq, h2 .* dcs)
     end
     Vc  = p.Vbias - Vout
     Fe1 = 0.5*Vc*Vc*dC1
@@ -524,7 +667,7 @@ function forces(z, p, a)
     z1, z2, z5 = z[1], z[2], z[5]; Vc = p.Vbias - z5
     Fs = spring(z1, p) - p.c1*z2
     Fc = 0.0; Fct = 0.0; Fb = 0.0; Fw = 0.0; Fd1 = 0.0; Fd2 = 0.0; Fe1 = 0.0; Fe2 = 0.0
-    Ct = p.cp; Pw = 0.0; Ps = p.c1*z2*z2; Pb = -a*p.beta[1]*z2; Pf = 0.0
+    Ct = p.cp; Pw = 0.0; Ps = p.c1*z2*z2; Pb = -a*p.beta[1]*z2; Pf = 0.0; Pce = 0.0
     for j in 1:p.n_cls
         x2, v2 = classtip(z, p, j); w = p.wcls[j]; e = p.ecls[j]
         xa, xb = shifted(z1, x2, e, p)
@@ -535,11 +678,11 @@ function forces(z, p, a)
         Fc += fc1; Fct += fc2; Fw += fw; Fb += -w*p.nb*p.ce*qd
         Fd1 += -w*(a11*z2 + a12*v2); Fd2 += -w*(a12*z2 + a22*v2)
         Fe1 += 0.5*Vc*Vc*w*c1; Fe2 += 0.5*Vc*Vc*w*c2
-        Ct += w*(ct - p.cp); Pw += pw; Ps += w*p.nb*p.ce*qd^2; Pb += -a*w*p.beta[2]*v2
+        Ct += w*(ct - p.cp); Pw += pw; Ps += w*p.nb*p.ce*qd^2; Pce += w*p.nb*p.ce*qd^2; Pb += -a*w*p.beta[2]*v2
         Pf += w*(a11*z2*z2 + 2*a12*z2*v2 + a22*v2*v2)
     end
     return (; Fs, Fc, Fct, Fb, Fw, Fd1, Fd2, Fe1, Fe2, Ct, Pb, Pe = p.Vbias*z5/p.Rload,
-              PR = z5*z5/p.Rload, Pf, Ps, Pw)
+              PR = z5*z5/p.Rload, Pf, Ps, Pw, Pce)
 end
  
 # Stored energy by reservoir, in base-relative coordinates:
@@ -601,7 +744,8 @@ function report(p)
     Fsc = p.k1*p.gc + p.k3*p.gc^3
     Fh  = p.orient == 0 ? Fe1c + Fe2c : abs(Fe1c)
     qr = create_params(Params{Float64}(panels = p.panels, gap_slope = 0.0, sigmap = 0.0, seal = false,
-                                       vent_faces = 2, orient = 0); verbose = false)
+                                       vent_faces = 2, orient = 0, kinetic = false, exit_factor = false,
+                                       chi_rest = 0.0); verbose = false)
     hr = qr.gc + qr.h_eff
     bt = 1 - 192/pi^5*(qr.Tf/qr.Leff)*sum(tanh(k*pi*qr.Leff/(2*qr.Tf))/k^5 for k in 1:2:199)
     dq = film(0.0, 0.0, qr)
@@ -619,12 +763,14 @@ function report(p)
     println("\n--- Modes ---")
     @printf("shuttle f1 = %.1f Hz   free electrode mode = %.2f kHz   tips-pinned contact mode = %.0f Hz\n",
             fr[1], fr[2]/1e3, sqrt((p.k1 + nbke)/Mc)/(2*pi))
-    @printf("zeta_c of ce in the contact mode = %.3g   shuttle Q of c1 = %s\n",
+    @printf("zeta_c of ce (stand-in for unmodelled contact loss) = %.3g   shuttle Q of c1 = %s\n",
             p.nb*p.ce/(2*sqrt((p.k1 + nbke)*Mc)), p.c1 > 0 ? @sprintf("%.3g", sqrt(p.k1*p.mtot)/p.c1) : "Inf")
-    println("\n--- Film, rigid closure of the whole array (vent_faces = ", p.vent_faces, ") ---")
+    println("\n--- Film, rigid closure of the whole array (vent_faces = ", p.vent_faces, ", kinetic = ", p.kinetic,
+            ", exit factor = ", p.exit_factor, ", sealing ", p.seal_shift ? "after nominal contact" : "centred on contact", ") ---")
+    @printf("tip pocket conductance = %.4e m^2 (chi_rest = %.2f)   free path = %.2f nm\n", p.kpocket, p.chi_rest, p.lambda*1e9)
     @printf("b(rest) = %.4e N s/m   b(contact) = %.4e N s/m\n", bsum(d0), bsum(dc))
     @printf("vented film / rectangular-plate solution (uniform gap, %d panels) = %.5f\n", p.panels, plate)
-    println("\n--- Electrostatics at nominal contact, Vbias = ", p.Vbias, " V ---")
+    println("\n--- Electrostatics at nominal contact, Vbias = ", p.Vbias, " V, fringing = ", p.fringing, " ---")
     @printf("Ct = %.4f pF   Fe on x1 = %.3f uN   Fe on tips = %.3f uN\n", Cc*1e12, Fe1c*1e6, Fe2c*1e6)
     @printf("suspension force at gc = %.2f uN   static hold voltage = %.2f V\n", Fsc*1e6, p.Vbias*sqrt(Fsc/Fh))
     println("\n--- Offset classes: n_cls = ", p.n_cls, ", offsets (nm) = ", round.(p.ecls .* 1e9; digits = 1))
@@ -866,8 +1012,32 @@ eqn = ODEProblem(CoupledSystem_wrapper!, z0 ./ zscale, tspan, p_new)
 fdjac = isdefined(@__MODULE__, :AutoFiniteDiff) ? AutoFiniteDiff() : false
 sol = solve(eqn, Rodas5P(autodiff = fdjac); abstol = abstol, reltol = reltol, dtmax = dtmax,
             maxiters = Int(1e7))
+
+# Gas-film linearity and contact census, over EVERY finger class (v8: with finger-gap spread the outer classes can
+# touch while the median class never does). The film stays linear while a tip closes or opens slower than about
+# 0.08 m/s (peak film pressure about 129 kPa per m/s at contact, one open face).
+let Z = reduce(hcat, sol.u) .* zscale, q = p_new, nz = size(Z, 1), ne = 2*(q.n_cls - 1)
+    vin = 0.0; vout = 0.0; jin = 0; jout = 0; census = String[]
+    for j in 1:q.n_cls
+        i2  = j == 1 ? 3 : nz - ne + 2*(j - 2) + 1                   # this class's tip states
+        tp  = (q.orient == 0 ? Z[i2, :] : Z[i2, :] .- Z[1, :]) .+ q.ecls[j]
+        tpd = q.orient == 0 ? Z[i2 + 1, :] : Z[i2 + 1, :] .- Z[2, :]
+        d   = abs.(tp) .- q.gc
+        ent = [i for i in 2:length(d) if d[i-1] < 0 && d[i] >= 0]
+        ext = [i for i in 2:length(d) if d[i-1] >= 0 && d[i] < 0]
+        vi = maximum([abs(tpd[i-1]) for i in ent]; init = 0.0); vo = maximum([abs(tpd[i]) for i in ext]; init = 0.0)
+        vi > vin && (vin = vi; jin = j); vo > vout && (vout = vo; jout = j)
+        push!(census, string(round(q.ecls[j]*1e9; digits = 1), " nm: ", count(i -> tp[i] > 0, ent), "/",
+                             count(i -> tp[i] < 0, ent), ", max overlap ", round(maximum(d)*1e9; digits = 1), " nm"))
+    end
+    println("gas-film linearity: max tip speed at impact ", round(1e3*vin; digits = 2), " mm/s",
+            jin > 0 ? string(" (class ", jin, ")") : "", ", at release ", round(1e3*vout; digits = 2), " mm/s (limit 80 mm/s; peak film pressure ~",
+            round(100*129e3*max(vin, vout)/101325; digits = 2), "% of 1 atm)")
+    println("contacts per finger class (offset: entries on wall +1 / wall -1, max overlap; negative = never touched): ", join(census, " | "))
+end
  
-println(">>> collision_model version v5.5 (orientation + offset classes + run folder; orient = ", p_new.orient,
+println(">>> collision_model version v8 (fringing = ", p_new.fringing, "; gas-film paper closure: kinetic = ", p_new.kinetic, ", exit factor = ",
+        p_new.exit_factor, ", pocket chi_rest = ", p_new.chi_rest, "; orient = ", p_new.orient,
         ", n_cls = ", p_new.n_cls, ", sig_off = ", p_new.sig_off, ", vent_faces = ",
         p_new.vent_faces, ", c1 = ", p_new.c1, ", ce = ", p_new.ce, ") <<<")
 println("Type of sol.u: ", typeof(sol.u))
@@ -895,29 +1065,18 @@ end
  
 use_ledger || println("Run-level energy check skipped: set use_ledger = true to carry the work integrals.")
 
-# ------------------------------------ Speed check ------------------------------------
-let Z = reduce(hcat, sol.u) .* zscale, q = p_new
-    tp  = q.orient == 0 ? Z[3, :] : Z[3, :] .- Z[1, :]     # median tip relative to its stiff face
-    tpd = q.orient == 0 ? Z[4, :] : Z[4, :] .- Z[2, :]
-    d   = abs.(tp) .- q.gc
-    vin  = maximum([abs(tpd[i-1]) for i in 2:length(d) if d[i-1] < 0 && d[i] >= 0]; init = 0.0)
-    vout = maximum([abs(tpd[i])   for i in 2:length(d) if d[i-1] >= 0 && d[i] < 0]; init = 0.0)
-    println("gas-film linearity: max tip speed at impact ", round(1e3*vin; digits = 2),
-            " mm/s, at release ", round(1e3*vout; digits = 2), " mm/s (limit 80 mm/s; peak film pressure ~",
-            round(100*129e3*max(vin, vout)/101325; digits = 2), "% of 1 atm)")
-end
-
 # ------------------------------------ Run Folder & Saving ------------------------------------
 # Every figure (PDF), the output data (XLSX) and the animation are written to RUN_Xg_YV_ZHz beside
 # this file (X = alpha, Y = Vbias, Z = f; whole numbers print without decimals, e.g. RUN_2g_3V_200Hz).
 numtag(x) = (r = round(Float64(x); digits = 4); isinteger(r) ? string(Int(r)) : string(r))
+show_plots = false   # true also displays every figure; in VS Code ~50 figures can block the plot pane's channel
 run_dir = joinpath(@__DIR__, string(use_experiment ? string("RUN_EXP_", exp_tag, "_") : "RUN_", numtag(alpha), "g_", numtag(p_new.Vbias), "V_", numtag(f), "Hz"))
 mkpath(run_dir)
 println("Saving figures, data and animation to: ", run_dir)
 
 # Display a figure and save it as a PDF in the run folder
 function showsave(pl, name)
-    display(pl)
+    show_plots && display(pl)
     savefig(pl, joinpath(run_dir, string(name, ".pdf")))
     return pl
 end
@@ -935,7 +1094,7 @@ function sample_window(sol, p, t0, t1; dt = 2e-6, Fext = Fext_input)
     Ct = zeros(n); Fs = zeros(n); Fc = zeros(n); Fct = zeros(n); Fw = zeros(n); Fb = zeros(n)
     Fe1 = zeros(n); Fe2 = zeros(n); Fd1 = zeros(n); Fd2 = zeros(n)
     Tk = zeros(n); Usp = zeros(n); Ube = zeros(n); Uw = zeros(n); Ue = zeros(n); E = zeros(n)
-    Pb = zeros(n); Pe = zeros(n); PR = zeros(n); Pf = zeros(n); Ps = zeros(n); Pw = zeros(n)
+    Pb = zeros(n); Pe = zeros(n); PR = zeros(n); Pf = zeros(n); Ps = zeros(n); Pw = zeros(n); Pce = zeros(n)
     for i in 1:n
         z  = U[:, i]
         ai = Fext(tg[i])
@@ -951,6 +1110,7 @@ function sample_window(sol, p, t0, t1; dt = 2e-6, Fext = Fext_input)
         Pf[i] = F.Pf                                  # squeeze film
         Ps[i] = F.Ps                                  # structure: shuttle c1 + beam ce
         Pw[i] = F.Pw                                  # tip contact (Hunt-Crossley)
+        Pce[i] = F.Pce                                # ce alone: the stand-in for unmodelled contact loss
     end
     V    = U[5,:]                                  # Vout is the state
     Q    = [(p.Vbias - V[i])*Ct[i] for i in 1:n]   # charge as observable
@@ -965,7 +1125,7 @@ function sample_window(sol, p, t0, t1; dt = 2e-6, Fext = Fext_input)
     col(k) = led ? U[k,:] : fill(NaN, n)
     return (; t = tg, x1 = U[1,:], x1dot = U[2,:], x2 = U[3,:], x2dot = U[4,:], tau, taudot = taud, q,
               Q, V, Ct, pen, htip, Fs, Fc, Fct, Fb, Fw, Fd1, Fd2, Fe1, Fe2, ae,
-              Tk, Usp, Ube, Uw, Ue, E, Pb, Pe, PR, Pf, Ps, Pw,
+              Tk, Usp, Ube, Uw, Ue, E, Pb, Pe, PR, Pf, Ps, Pw, Pce,
               Wb = col(6), Wbias = col(7), ER = col(8), Df = col(9), Ds = col(10),
               Dw = col(11), thr = col(12), led)
 end
@@ -1079,6 +1239,9 @@ if use_ledger
     println("\n================ ENERGY BUDGET, LAST TWO CYCLES ================")
     @printf("inputs : W base %+.4e J   W bias %+.4e J   release of stored energy %+.4e J\n", budget[1], budget[2], budget[3])
     @printf("sinks  : load %.4e J   film %.4e J   structure %.4e J   wall %.4e J\n", budget[4], budget[5], budget[6], budget[7])
+    Dce = sum(0.5*(Wzoom.Pce[i] + Wzoom.Pce[i+1])*(Wzoom.t[i+1] - Wzoom.t[i]) for i in 1:length(Wzoom.t)-1)
+    @printf("         of the structure, the ce stand-in for unmodelled contact loss carries %.4e J = %.1f%% of all losses\n",
+            Dce, 100*Dce/max(sum(budget[4:7]), 1e-300))
     @printf("balance: inputs - sinks = %+.3e J   (%.2e of the inputs)\n", sum(budget[1:3]) - sum(budget[4:7]),
             abs(sum(budget[1:3]) - sum(budget[4:7]))/max(abs(sum(budget[1:3])), 1e-300))
     @printf("load share of the base work  E_load/W_base = %.4f   (an efficiency only if the window is periodic)\n",
@@ -1140,7 +1303,7 @@ ph5z = plot(Wzoom.Q .* 1e12, Wzoom.V .* 1e3, xlabel = "Q (pC)", ylabel = "Vout (
  
 # ========================== (4) LABELLED COLLISION CLOSE-UPS =============================
 # Same-side contact sequences from the accepted steps: entries closer together than `gap`
-# belong to one sequence (one wall, one half cycle).
+# belong to one sequence (one wall, one half cycle); a change of wall always starts a new one.
 function contact_sequences(tt, x2, x1dot, gc; gap = 8e-3)
     dls  = abs.(x2) .- gc
     ient = [i for i in 2:length(dls) if dls[i-1] < 0 && dls[i] >= 0]
@@ -1149,7 +1312,7 @@ function contact_sequences(tt, x2, x1dot, gc; gap = 8e-3)
     isempty(ient) && return seqs, ient, iext
     k0 = 1
     for k in 2:length(ient)+1
-        if k > length(ient) || tt[ient[k]] - tt[ient[k-1]] > gap
+        if k > length(ient) || tt[ient[k]] - tt[ient[k-1]] > gap || sign(x2[ient[k]]) != sign(x2[ient[k-1]])
             ks   = k0:k-1
             jx   = findfirst(>(ient[ks[end]]), iext)
             tend = jx === nothing ? tt[end] : tt[iext[jx]]
@@ -1273,7 +1436,7 @@ function collision_figure(Wd, p; tag = "", unit = :us)
     return fig, met
 end
  
-seqs, ient, iext = contact_sequences(sol.t, tauS, taudS, p_new.gc)
+seqs, ient, iext = contact_sequences(sol.t, tauS, taudS, p_new.gc; gap = min(8e-3, 0.25/f))
 if isempty(seqs)
     println("\nNo contact this run (closest approach ",
             round(-maximum(abs.(tauS) .- p_new.gc)*1e9; digits = 1), " nm). Collision close-ups skipped.")
@@ -1287,6 +1450,38 @@ else
     @printf("wall +1: %d visits, %d contacts     wall -1: %d visits, %d contacts\n",
             count(s -> s.side > 0, seqs), sum([s.n for s in seqs if s.side > 0]; init = 0),
             count(s -> s.side < 0, seqs), sum([s.n for s in seqs if s.side < 0]; init = 0))
+
+    # Chatter decay over the first flights of each wall visit, the calibration target for ce (bench at 20 Hz:
+    # first chatter intervals 3.34 -> 2.26 ms, successive ratios 0.68-0.75). Flight = release to the next impact
+    # on the same wall, so the ~0.12 ms contacts do not dilute the ratio; impact speed = tip closing speed on
+    # the last step before contact. Up to the first three flights / four impacts of every visit are used.
+    let cr = crossings(sol.t, abs.(tauS) .- p_new.gc), sg = sign.(tauS), tt = sol.t
+        tin, tout = cr
+        idx(tq) = clamp(searchsortedfirst(tt, tq), 2, length(tt))
+        wall(tq) = sg[idx(tq)]
+        vis = Vector{Vector{Float64}}(); cur = Float64[]
+        for tk in tin
+            if !isempty(cur) && (wall(tk) != wall(cur[end]) || tk - cur[end] > min(8e-3, 0.25/f))
+                push!(vis, cur); cur = Float64[]
+            end
+            push!(cur, tk)
+        end
+        isempty(cur) || push!(vis, cur)
+        fr = Float64[]; vr = Float64[]; fl1 = Float64[]
+        for v in vis
+            length(v) >= 3 || continue
+            fl = [v[k] - tout[searchsortedlast(tout, v[k])] for k in 2:min(length(v), 4)]
+            vi = [abs(taudS[idx(v[k]) - 1]) for k in 1:min(length(v), 4)]
+            push!(fl1, fl[1]); append!(fr, fl[2:end] ./ fl[1:end-1]); append!(vr, vi[2:end] ./ vi[1:end-1])
+        end
+        med(x) = sort(x)[cld(length(x), 2)]
+        if isempty(fr)
+            println("chatter decay: no wall visit with three or more impacts")
+        else
+            @printf("chatter decay over the first flights of %d visits: first flight %.2f ms, flight-time ratio %.3f, impact-speed ratio %.3f (medians; bench ~0.73 with 2-4 ms flights)\n",
+                    length(fl1), 1e3*med(fl1), med(fr), med(vr))
+        end
+    end
  
     recent = [s for s in seqs if s.t0 >= sol.t[end] - 2*Tdrive]
     isempty(recent) && (recent = seqs)
@@ -1430,7 +1625,7 @@ energy_cols  = Any[Wover.t, Wover.Tk, Wover.Usp, Wover.Ube, Wover.Uw, Wover.Ue, 
 energy_names = ["t (s)", "kinetic (J)", "suspension + stoppers (J)", "bending (J)", "contact (J)",
                 "electrical (J)", "total E (J)", "P base (W)", "P bias (W)", "P load (W)", "P film (W)",
                 "P struct (W)", "P contact (W)"]
-info = [("alpha (g)", alpha), ("f (Hz)", f), ("Vbias (V)", p_new.Vbias), ("Rload (Ohm)", p_new.Rload),
+info = [("alpha (g)", alpha), ("f (Hz)", f), ("Vbias (V)", p_new.Vbias), ("Rload (Ohm)", p_new.Rload), ("fringing", p_new.fringing),
         ("orient", p_new.orient), ("n_cls", p_new.n_cls), ("mu_off (m)", p_new.mu_off),
         ("sig_off (m)", p_new.sig_off), ("k1 (N/m)", p_new.k1), ("ke (N/m)", p_new.ke), ("c1 (N s/m)", p_new.c1),
         ("ce (N s/m)", p_new.ce), ("vent_faces", p_new.vent_faces), ("n_cycles", n_cycles),

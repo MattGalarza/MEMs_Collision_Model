@@ -1,0 +1,48 @@
+Lean (version 4.35.0-rc4, x86_64-unknown-linux-gnu, commit c29b6dda4f7c20e3eeaa717c4e565663c5cfa364, Release)
+
+== lean SqueezeFilm/Core.lean
+SqueezeFilm/Core.lean:103:0: warning: automatically included section variable(s) unused in theorem `SqueezeFilm.Core.flux_antiderivative_matches`:
+  [Lean.Grind.IsCharP α 0]
+consider restructuring your `variable` declarations so that the variables are not in scope or explicitly omit them:
+  omit [Lean.Grind.IsCharP α 0] in theorem ...
+SqueezeFilm/Core.lean:238:0: warning: automatically included section variable(s) unused in theorem `SqueezeFilm.Core.homogeneity`:
+  [Lean.Grind.IsCharP α 0]
+consider restructuring your `variable` declarations so that the variables are not in scope or explicitly omit them:
+  omit [Lean.Grind.IsCharP α 0] in theorem ...
+SqueezeFilm/Core.lean:268:0: warning: automatically included section variable(s) unused in theorem `SqueezeFilm.Core.small_taper_constant`:
+  [Lean.Grind.IsCharP α 0]
+consider restructuring your `variable` declarations so that the variables are not in scope or explicitly omit them:
+  omit [Lean.Grind.IsCharP α 0] in theorem ...
+exit status: 0
+'SqueezeFilm.Core.mul_ne_zero'' depends on axioms: [propext, Classical.choice, Quot.sound]
+'SqueezeFilm.Core.inv_ne_zero'' depends on axioms: [propext, Classical.choice, Quot.sound]
+'SqueezeFilm.Core.div_ne_zero'' depends on axioms: [propext, Classical.choice, Quot.sound]
+'SqueezeFilm.Core.div_eq_of_eq_mul'' depends on axioms: [propext, Classical.choice, Quot.sound]
+'SqueezeFilm.Core.two_ne_zero'' depends on axioms: [propext, Classical.choice, Quot.sound]
+'SqueezeFilm.Core.pow2_ne_zero'' depends on axioms: [propext, Classical.choice, Quot.sound]
+'SqueezeFilm.Core.pow3_ne_zero'' depends on axioms: [propext, Classical.choice, Quot.sound]
+zmom_viscous: depends on axioms: [propext, Classical.choice, Quot.sound]
+scaling_coefficients: depends on axioms: [propext, Classical.choice, Quot.sound]
+reynolds_ratio: depends on axioms: [propext, Classical.choice, Quot.sound]
+stokes_hypothesis: depends on axioms: [propext, Classical.choice, Quot.sound]
+profile_slip_conditions: depends on axioms: [propext, Classical.choice, Quot.sound]
+flux_antiderivative_matches: depends on axioms: [propext, Classical.choice, Quot.sound]
+poiseuille_part: depends on axioms: [propext, Classical.choice, Quot.sound]
+couette_part: depends on axioms: [propext, Classical.choice, Quot.sound]
+flux_law: depends on axioms: [propext, Classical.choice, Quot.sound]
+dissipation_identity: depends on axioms: [propext, Classical.choice, Quot.sound]
+kinematic_condition: depends on axioms: [propext, Classical.choice, Quot.sound]
+leibniz_collection: depends on axioms: [propext, Classical.choice, Quot.sound]
+small_taper_moments: depends on axioms: [propext, Classical.choice, Quot.sound]
+strip_uniform: depends on axioms: [propext, Classical.choice, Quot.sound]
+strip_limit_B: depends on axioms: [propext, Classical.choice, Quot.sound]
+corner_ode_algebra: depends on axioms: [propext, Classical.choice, Quot.sound]
+corner_flux_forms: depends on axioms: [propext, Classical.choice, Quot.sound]
+corner_sealed: depends on axioms: [propext, Classical.choice, Quot.sound]
+corner_open: depends on axioms: [propext, Classical.choice, Quot.sound]
+slip_corner_constant: depends on axioms: [propext, Classical.choice, Quot.sound]
+finiteness_bracket: depends on axioms: [propext, Classical.choice, Quot.sound]
+homogeneity: depends on axioms: [propext, Classical.choice, Quot.sound]
+slice_partial_fractions: depends on axioms: [propext, Classical.choice, Quot.sound]
+small_taper_constant: depends on axioms: [propext, Classical.choice, Quot.sound]
+moy_mapping: depends on axioms: [propext, Classical.choice, Quot.sound]

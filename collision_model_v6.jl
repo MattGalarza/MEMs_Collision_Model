@@ -125,7 +125,7 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     #         so it does NOT set the shuttle-level restitution; ce does.
     # Tested insensitive (wall x100, epsw/10, epsg/4, ls/5): none of these widths
     # creates or removes the chatter; they are numerics, not physics.
-    h_eff::T = 50e-9     # Residual contact air gap
+    h_eff::T = 5e-9     # Residual contact air gap
     epsg::T = 2e-9       # Gap positive-part smoothing
     epsw::T = 0.5e-9     # Wall engagement smoothing
     epss::T = 1e-9       # Soft/hard stopper engagement smoothing

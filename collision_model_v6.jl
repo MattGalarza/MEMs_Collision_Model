@@ -674,7 +674,7 @@ import .AnalyticalModel
  
 # Sine Wave External Force
 f = 20.0        # Frequency (Hz)
-alpha = 1.3    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
+alpha = 2    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
                 # Quasi-static contact threshold at 3 V is between 2.0 and 2.1
 g = 9.80665     # Gravitational constant (m/s^2)
 A = alpha*g
@@ -1448,6 +1448,11 @@ XLSX.openxlsx(xlsx_path, mode = "w") do xf
     isempty(exp_cols) || XLSX.writetable!(XLSX.addsheet!(xf, "Experiment"), exp_cols, exp_names)
 end
 println("Saved output data: ", xlsx_path)
+
+
+
+
+
 
 
 #-------------------------------------------------------------------

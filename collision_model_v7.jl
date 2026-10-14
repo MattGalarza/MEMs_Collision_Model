@@ -150,7 +150,7 @@ export Params, p, create_params, spring, collision, damping, electrostatic, Coup
     #         so it does NOT set the shuttle-level restitution; ce does.
     # Tested insensitive (wall x100, epsw/10, epsg/4, ls/5): none of these widths
     # creates or removes the chatter; they are numerics, not physics.
-    h_eff::T = 50e-9     # Residual contact air gap
+    h_eff::T = 5e-9     # Residual contact air gap
     epsg::T = 2e-9       # Gap positive-part smoothing
     epsw::T = 0.5e-9     # Wall engagement smoothing
     epss::T = 1e-9       # Soft/hard stopper engagement smoothing
@@ -774,7 +774,7 @@ import .AnalyticalModel
  
 # Sine Wave External Force
 f = 20.0        # Frequency (Hz)
-alpha = 1.0    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
+alpha = 1.15    # Applied acceleration constant (g). 4.95 -> panel (d); 2.7 -> panel (e).
                 # Quasi-static contact threshold at 3 V is between 2.0 and 2.1
 g = 9.80665     # Gravitational constant (m/s^2)
 A = alpha*g
